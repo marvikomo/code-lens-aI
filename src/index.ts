@@ -375,7 +375,7 @@ export class CodeLensAI {
             calls: [],
             imports: []
         });
-        
+
 
     }
 
@@ -398,6 +398,16 @@ export class CodeLensAI {
             for (const filePath of batchs) {
                 console.log('Batch:', filePath);
                 await this.parseFile(filePath);
+            }
+
+            // Analyze parsed files
+            for (const filePath of batchs) {
+                if (this.parsedFiles.has(filePath)) {
+                    const parsedFile = this.parsedFiles.get(filePath)!;
+
+                    // Extract function declarations
+                   
+                }
             }
 
         }
