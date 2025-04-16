@@ -338,6 +338,41 @@ export class CodeLensAI {
         return null;
     }
 
+ /**
+   * Parse a file with the appropriate language parser
+   * @param filePath Path to the file
+   * @private
+   */
+  private async parseFile(filePath: string): Promise<void> {
+    const language = this.detectLanguage(filePath);
+    if (!language) {
+        console.warn(`Unsupported file type: ${filePath}`);
+        return;
+      }
+      const content = fs.readFileSync(filePath, 'utf8');
+
+       // Store file content
+       this.files.set(filePath, {
+        path: filePath,
+        language,
+        content
+      });
+
+      // Parse with Tree-sitter
+      const parser = this.languages[language].parser;
+      const tree = parser.parse(content);
+
+      // Store parsed file
+      this.parsedFiles.set(filePath, {
+        path: filePath,
+        language,
+        tree,
+        functions: new Map(),
+        calls: [],
+        imports: []
+      });
+
+}
 
 }
 
