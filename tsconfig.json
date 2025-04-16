@@ -1,16 +1,25 @@
 {
   "compilerOptions": {
-    "target": "es2020",
+    "target": "es2018",
     "module": "commonjs",
-    "outDir": "./dist",
-    "rootDir": "./src",
+    "lib": ["es2018"],
     "strict": false,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "types": ["node"],
-    "moduleResolution": "node"
+    "outDir": "./dist",
+    "types": ["jest", "node"],
+    "moduleResolution": "node",
+    "resolveJsonModule": true,
+    "jsx": "react",
+    "baseUrl": ".",
+    "paths": {
+      "*": ["node_modules/*", "src/types/*"]
+    }
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "**/*.test.ts"]
+  "include": [
+    "src/**/*",
+    "jest.config.js"
+  ],
+  "exclude": ["node_modules"]
 }
