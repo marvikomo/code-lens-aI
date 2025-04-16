@@ -273,12 +273,16 @@ export class CodeLensAI {
 
         const files = await this.collectFiles(directoryPath, options);
 
+        await this.performAnalysis(files);
+
+        console.log('parsed files', this.parsedFiles)
+
         console.log('Files collected:', files);
     }
 
 
     private async collectFiles(directory: string, options: { ignoreDirs?: string[], ignoreFiles?: string[] } = {}) {
-      console.log('Collecting files in dir1:', directory);
+        console.log('Collecting files in dir1:', directory);
         const files: any = [];
 
         const ignoredDirs = new Set(['node_modules', '.git', '.github', 'dist', 'build',
@@ -338,41 +342,69 @@ export class CodeLensAI {
         return null;
     }
 
- /**
-   * Parse a file with the appropriate language parser
-   * @param filePath Path to the file
-   * @private
-   */
-  private async parseFile(filePath: string): Promise<void> {
-    const language = this.detectLanguage(filePath);
-    if (!language) {
-        console.warn(`Unsupported file type: ${filePath}`);
-        return;
-      }
-      const content = fs.readFileSync(filePath, 'utf8');
+    /**
+      * Parse a file with the appropriate language parser
+      * @param filePath Path to the file
+      * @private
+      */
+    private async parseFile(filePath: string): Promise<void> {
+        const language = this.detectLanguage(filePath);
+        if (!language) {
+            console.warn(`Unsupported file type: ${filePath}`);
+            return;
+        }
+        const content = fs.readFileSync(filePath, 'utf8');
 
-       // Store file content
-       this.files.set(filePath, {
-        path: filePath,
-        language,
-        content
-      });
+        // Store file content
+        this.files.set(filePath, {
+            path: filePath,
+            language,
+            content
+        });
 
-      // Parse with Tree-sitter
-      const parser = this.languages[language].parser;
-      const tree = parser.parse(content);
+        // Parse with Tree-sitter
+        const parser = this.languages[language].parser;
+        const tree = parser.parse(content);
 
-      // Store parsed file
-      this.parsedFiles.set(filePath, {
-        path: filePath,
-        language,
-        tree,
-        functions: new Map(),
-        calls: [],
-        imports: []
-      });
+        // Store parsed file
+        this.parsedFiles.set(filePath, {
+            path: filePath,
+            language,
+            tree,
+            functions: new Map(),
+            calls: [],
+            imports: []
+        });
+        
 
-}
+    }
+
+    /**
+      * Perform static AST analysis on files
+      * @param files Array of file paths
+      * @private
+      */
+
+    private async performAnalysis(files: string[]): Promise<void> {
+        console.log('Starting static AST analysis phase...');
+
+        // Process files in batches to avoid memory issues
+        const batchSize = 50;
+
+        for (let i = 0; i < files.length; i += batchSize) {
+
+            let batchs = files.slice(i, i + batchSize);
+            // Parse files
+            for (const filePath of batchs) {
+                console.log('Batch:', filePath);
+                await this.parseFile(filePath);
+            }
+
+        }
+
+
+
+    }
 
 }
 
