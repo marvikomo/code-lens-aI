@@ -406,7 +406,7 @@ export class CodeLensAI {
                     const parsedFile = this.parsedFiles.get(filePath)!;
 
                     // Extract function declarations
-                   
+
                 }
             }
 
@@ -415,6 +415,251 @@ export class CodeLensAI {
 
 
     }
+
+
+    /**
+ * Extract functions from a parsed file
+ * @param parsedFile Parsed file object
+ * @private
+ */
+    private extractFunctions(parsedFile: ParsedFile): void {
+        const { path: filePath, language, tree } = parsedFile;
+        const query = this.languages[language].queries.functions;
+
+        try {
+            const captures = query.captures(tree.rootNode);
+            const classMap = new Map<number, string>();
+
+            // First pass - identify classes
+            for (const { node, name } of captures) {
+                if (name === 'class_name') {
+                    const className = node.text;
+                    const classNode = node.parent;
+
+                    if (classNode) {
+                        classMap.set(classNode.id, className);
+
+                        // Create class node
+                        const classId = `${filePath}:${className}`;
+                        this.nodes.set(classId, {
+                            id: classId,
+                            name: className,
+                            type: 'class',
+                            language,
+                            file: filePath,
+                            range: {
+                                start: classNode.startPosition,
+                                end: classNode.endPosition
+                            }
+                        });
+                    }
+                }
+            }
+
+            // Second pass - extract functions/methods
+            for (const { node, name } of captures) {
+                if (name === 'function' || name === 'method') {
+                    let funcName = '';
+                    let funcType = name as 'function' | 'method';
+                    let className: string | null = null;
+
+                    // Find function name
+                    for (const capture of captures) {
+                        if ((capture.name === 'func_name' || capture.name === 'method_name') &&
+                            node.startIndex <= capture.node.startIndex &&
+                            capture.node.endIndex <= node.endIndex) {
+                            funcName = capture.node.text;
+                            break;
+                        }
+                    }
+
+                    // If it's a method, find the class it belongs to
+                    if (name === 'method') {
+                        for (const [nodeId, name] of classMap.entries()) {
+                            const parent = node.parent;
+                            if (parent && parent.parent && parent.parent.id === nodeId) {
+                                className = name;
+                                funcName = `${className}.${funcName}`;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (funcName) {
+                        // Get docstring/comments if available
+                        const docstring = this.extractDocstring(node, language);
+
+                        // Create function node
+                        const funcId = `${filePath}:${funcName}`;
+                        const functionNode: FunctionNode = {
+                            id: funcId,
+                            name: funcName,
+                            type: funcType,
+                            language,
+                            file: filePath,
+                            docstring,
+                            className,
+                            range: {
+                                start: node.startPosition,
+                                end: node.endPosition
+                            }
+                        };
+
+                        this.nodes.set(funcId, functionNode);
+                        parsedFile.functions.set(funcId, functionNode);
+
+                        // If this is a method, create relationship to class
+                        if (className) {
+                            const classId = `${filePath}:${className}`;
+                            const edgeId = `${classId}->HAS_METHOD->${funcId}`;
+
+                            this.edges.set(edgeId, {
+                                id: edgeId,
+                                from: classId,
+                                to: funcId,
+                                type: 'HAS_METHOD',
+                                source: 'AST-direct',
+                                confidence: 1.0
+                            });
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            console.error(`Error extracting functions from ${filePath}:`, (error as Error).message);
+        }
+    }
+
+    /**
+ * Extract docstring from node by language
+ * @param node Tree-sitter node
+ * @param language Programming language
+ * @returns Extracted docstring
+ * @private
+ */
+private extractDocstring(node: Parser.SyntaxNode, language: string): string {
+    if (!node) return '';
+    
+    try {
+      // Instead of accessing tree.sourcePath (which doesn't exist in Tree-sitter types),
+      // we need to find the file path another way - we'll use our parsing context
+      let filePath: string | undefined;
+      
+      // Find the root node and use it to identify the file
+      const rootNode = node.tree?.rootNode;
+      if (rootNode) {
+        // Match this node's root with our parsed files to find the path
+        for (const [path, parsedFile] of this.parsedFiles.entries()) {
+          if (parsedFile.tree.rootNode === rootNode) {
+            filePath = path;
+            break;
+          }
+        }
+      }
+      
+      if (!filePath || !this.files.has(filePath)) return '';
+      
+      const content = this.files.get(filePath)!.content;
+      
+      // Language-specific docstring extraction
+      switch (language) {
+        case 'javascript':
+          // Look for JSDoc-style comments
+          const jsStart = node.startPosition.row;
+          if (jsStart > 0) {
+            const lines = content.split('\n');
+            const commentLines = [];
+            
+            // Look for comments before the function
+            for (let i = jsStart - 1; i >= Math.max(0, jsStart - 20); i--) {
+              const line = lines[i].trim();
+              
+              // Found the start of a JSDoc block
+              if (line.startsWith('/**')) {
+                commentLines.unshift(line);
+                break;
+              }
+              // Middle of JSDoc block
+              else if (line.startsWith('*')) {
+                commentLines.unshift(line);
+              }
+              // Empty line or regular comment - continue looking
+              else if (line === '' || line.startsWith('//')) {
+                continue;
+              }
+              // End search if we hit code
+              else {
+                break;
+              }
+            }
+            
+            if (commentLines.length > 0) {
+              return commentLines.join('\n');
+            }
+          }
+          break;
+          
+        case 'python':
+          // Look for triple-quoted docstrings in function body
+          if (node.childCount > 0) {
+            const body = node.childCount > 2 ? node.child(2) : null; // Function body in Python
+            
+            if (body && body.childCount > 0) {
+              const firstStatement = body.child(0);
+              
+              if (firstStatement && firstStatement.type === 'expression_statement') {
+                const expr = firstStatement.child(0);
+                
+                if (expr && expr.type === 'string') {
+                  return expr.text.replace(/^(['"])\1\1([\s\S]*)\1\1\1$/, '$2').trim();
+                }
+              }
+            }
+          }
+          break;
+          
+        case 'java':
+          // Look for Javadoc comments
+          const javaStart = node.startPosition.row;
+          if (javaStart > 0) {
+            const lines = content.split('\n');
+            const commentLines = [];
+            
+            // Look for comments before the method
+            for (let i = javaStart - 1; i >= Math.max(0, javaStart - 20); i--) {
+              const line = lines[i].trim();
+              
+              // Found the start of a Javadoc block
+              if (line.startsWith('/**')) {
+                commentLines.unshift(line);
+                break;
+              }
+              // Middle of Javadoc block
+              else if (line.startsWith('*')) {
+                commentLines.unshift(line);
+              }
+              // Empty line - continue looking
+              else if (line === '') {
+                continue;
+              }
+              // End search if we hit code
+              else {
+                break;
+              }
+            }
+            
+            if (commentLines.length > 0) {
+              return commentLines.join('\n');
+            }
+          }
+          break;
+      }
+    } catch (error) {
+      console.error('Error extracting docstring:', (error as Error).message);
+    }
+    
+    return '';
+  }
 
 }
 
