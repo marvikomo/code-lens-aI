@@ -560,7 +560,7 @@ private extractDocstring(node: Parser.SyntaxNode, language: string): string {
       if (!filePath || !this.files.has(filePath)) return '';
       
       const content = this.files.get(filePath)!.content;
-      
+      //For now we will impl for javascript, python and java
       // Language-specific docstring extraction
       switch (language) {
         case 'javascript':
