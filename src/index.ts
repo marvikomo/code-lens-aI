@@ -1,7 +1,15 @@
 import Parser from 'tree-sitter';
 import * as fs from 'fs';
 import * as path from 'path';
+// Update the module declaration to match tree-sitter's Language type
+// Import the module directly without type declaration
 import JavaScript from 'tree-sitter-javascript';
+
+// Create a type for the language instance
+type TreeSitterLanguage = Parser.Language & {
+    nodeTypeInfo: any;
+};
+
 
 interface FileInfo {
     path: string,
@@ -132,6 +140,8 @@ export class CodeLensAI {
         this.files = new Map<string, FileInfo>();
         this.parsedFiles = new Map<string, ParsedFile>();
         this.jsParser = new Parser();
+        this.jsParser.setLanguage(JavaScript as TreeSitterLanguage);
+
         // Initialize language configurations
         this.languages = {
             javascript: {
@@ -152,42 +162,72 @@ export class CodeLensAI {
    * @returns Tree-sitter query for JavaScript functions
    * @private
    */
-  private createJavaScriptFunctionQuery(): Parser.Query {
-    const queryString = `
-      ; Function declarations
-      (function_declaration
-        name: (identifier) @func_name) @function
+    private createJavaScriptFunctionQuery(): Parser.Query {
+        const queryString = `
+  ;; Named function declarations
+  (function_declaration
+    name: (identifier) @name) @function
 
-      ; Arrow functions assigned to variables
-      (variable_declarator
-        name: (identifier) @func_name
-        value: (arrow_function)) @function
+  ;; Exported named functions
+  (export_statement
+    (function_declaration
+      name: (identifier) @name)) @function
 
-      ; Function expressions assigned to variables
-      (variable_declarator
-        name: (identifier) @func_name
-        value: (function)) @function
+  ;; Exported default anonymous function
+  (export_statement
+    (function_expression) @function)
 
-      ; Class declarations
-      (class_declaration
-        name: (identifier) @class_name) @class
+  ;; Exported default arrow function
+  (export_statement
+    (arrow_function) @function)
 
-      ; Class methods
-      (method_definition
-        name: (property_identifier) @method_name) @method
-    `;
-    
-    return new Parser.Query(this.jsParser.getLanguage(), queryString);
-  }
+  ;; Arrow functions assigned to variables
+  (variable_declarator
+    name: (identifier) @name
+    value: (arrow_function)) @function
+
+  ;; Function expressions assigned to variables
+  (variable_declarator
+    name: (identifier) @name
+    value: (function_expression)) @function
+
+  ;; Class declarations
+  (class_declaration
+    name: (identifier) @name) @class
+
+  ;; Class expressions (e.g., const A = class {})
+  (variable_declarator
+    name: (identifier) @name
+    value: (class)) @class
+
+  ;; Method definitions (including static)
+  (method_definition
+    name: (property_identifier) @name) @method
+
+  ;; Constructors
+  (method_definition
+    name: (property_identifier) @name
+    (#eq? @name "constructor")) @constructor
+
+  ;; Object literal methods
+  (pair
+    key: (property_identifier) @name
+    value: (function_expression)) @method
+`;
 
 
-   /**
-   * Create the JavaScript import query for Tree-sitter
-   * @returns Tree-sitter query for JavaScript imports
-   * @private
-   */
-   private createJavaScriptImportQuery(): Parser.Query {
-    const queryString = `
+        return new Parser.Query(JavaScript as TreeSitterLanguage, queryString);
+
+    }
+
+
+    /**
+    * Create the JavaScript import query for Tree-sitter
+    * @returns Tree-sitter query for JavaScript imports
+    * @private
+    */
+    private createJavaScriptImportQuery(): Parser.Query {
+        const queryString = `
       ; Import statements
       (import_statement
         source: (string) @import_source
@@ -202,9 +242,9 @@ export class CodeLensAI {
         function: (identifier) @require
         arguments: (arguments (string) @require_path))
     `;
-    
-    return new Parser.Query(this.jsParser.getLanguage(), queryString);
-  }
+
+        return new Parser.Query(this.jsParser.getLanguage(), queryString);
+    }
 
 
     /**
@@ -224,19 +264,22 @@ export class CodeLensAI {
               object: (identifier) @object
               property: (property_identifier) @method)) @method_call
         `;
-        
-        return new Parser.Query(this.jsParser.getLanguage(), queryString);
-      }
 
-    analyze(directoryPath: string, options: { ignoreDirs?: string[], ignoreFiles?: string[] } = {}): void {
-        // TODO: Implement code analysis
+        return new Parser.Query(this.jsParser.getLanguage(), queryString);
+    }
+
+    public async analyze(directoryPath: string, options: { ignoreDirs?: string[], ignoreFiles?: string[] } = {}): Promise<void> {
         console.log('Analyzing dir:', directoryPath);
+
+        const files = await this.collectFiles(directoryPath, options);
+
+        console.log('Files collected:', files);
     }
 
 
     private async collectFiles(directory: string, options: { ignoreDirs?: string[], ignoreFiles?: string[] } = {}) {
-
-        const files = [];
+      console.log('Collecting files in dir1:', directory);
+        const files: any = [];
 
         const ignoredDirs = new Set(['node_modules', '.git', '.github', 'dist', 'build',
             'target', 'bin', 'obj', 'out', '.idea', '.vscode',
@@ -248,6 +291,7 @@ export class CodeLensAI {
         ]);
 
         const collectFilesRecursive = (dir: string): void => {
+            console.log('Collecting files in dir:', dir);
             const entries = fs.readdirSync(dir, { withFileTypes: true });
 
             for (const entry of entries) {
@@ -268,7 +312,12 @@ export class CodeLensAI {
             }
         };
 
+        collectFilesRecursive(directory);
+        return files;
+
     }
+
+
 
 
     /**
@@ -292,6 +341,4 @@ export class CodeLensAI {
 
 }
 
-// Example usage
-const codeLens = new CodeLensAI();
-codeLens.analyze('console.log("Hello, World!");');
+
