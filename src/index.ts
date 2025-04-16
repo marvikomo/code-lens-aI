@@ -18,10 +18,10 @@ interface CodeNode {
     docstring?: string;
     className?: string | null;
     range?: {
-      start: Parser.Point;
-      end: Parser.Point;
+        start: Parser.Point;
+        end: Parser.Point;
     };
-  }
+}
 
 /**
  * Function/method node
@@ -30,16 +30,16 @@ interface FunctionNode extends CodeNode {
     type: 'function' | 'method';
     className?: string | null;
     docstring?: string;
-  }
+}
 
-  /**
- * Call information
- */
+/**
+* Call information
+*/
 interface CallInfo {
     from: string;
     to: string;
     node: Parser.SyntaxNode;
-  }
+}
 
 /**
  * Import information
@@ -48,7 +48,7 @@ interface ImportInfo {
     source: string;
     specifiers?: string[];
     default?: string;
-  }
+}
 
 /**
  * Parsed file interface
@@ -60,11 +60,11 @@ interface ParsedFile {
     functions: Map<string, FunctionNode>;
     calls: Array<CallInfo>;
     imports: Array<ImportInfo>;
-  }
+}
 
-  /**
- * Edge in the code graph
- */
+/**
+* Edge in the code graph
+*/
 interface CodeEdge {
     id: string;
     from: string;
@@ -78,14 +78,14 @@ interface CodeEdge {
     reason?: string;
     file?: string;
     range?: {
-      start: Parser.Point;
-      end: Parser.Point;
+        start: Parser.Point;
+        end: Parser.Point;
     };
-  }
+}
 
-  /**
- * Search result interface
- */
+/**
+* Search result interface
+*/
 export interface SearchResult {
     id: string;
     name: string;
@@ -96,11 +96,11 @@ export interface SearchResult {
     capabilities: string[];
     score: number;
     graphContext?: {
-      callers: string[];
-      callees: string[];
-      related: string[];
+        callers: string[];
+        callees: string[];
+        related: string[];
     };
-  }
+}
 
 export class CodeLensAI {
 
@@ -116,9 +116,25 @@ export class CodeLensAI {
         this.parsedFiles = new Map<string, ParsedFile>();
     }
 
-    analyze(directoryPath: string, options: { ignoreDirs?: string[], ignoreFiles?: string[]} = {}): void {
+    analyze(directoryPath: string, options: { ignoreDirs?: string[], ignoreFiles?: string[] } = {}): void {
         // TODO: Implement code analysis
         console.log('Analyzing dir:', directoryPath);
+    }
+
+
+    private async collectFiles(directory: string, options: { ignoreDirs?: string[], ignoreFiles?: string[] } = {}) {
+
+        const files = [];
+
+        const ignoreDir = new Set(['node_modules', '.git', '.github', 'dist', 'build',
+            'target', 'bin', 'obj', 'out', '.idea', '.vscode',
+            ...(options.ignoreDirs || [])]);
+
+        const ignoredFiles = new Set([
+            '.DS_Store', 'Thumbs.db', 'package-lock.json', 'yarn.lock',
+            ...(options.ignoreFiles || [])
+        ]);
+
     }
 }
 
