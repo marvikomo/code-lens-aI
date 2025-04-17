@@ -11,13 +11,27 @@ export class Logger {
         }
     }
 
-    public writeResults(data: any): void {
+    public writeResults(data: Map<string, any>): void {
         const timestamp = new Date().toISOString().split('T')[0];
         const outputFile = path.join(this.outputDir, `analysis_${timestamp}.json`);
         
+        // Convert Map to a plain object
+        const plainObject = Object.fromEntries(
+            Array.from(data.entries()).map(([key, value]) => [
+                key,
+                {
+                    path: value.path,
+                    language: value.language,
+                    functions: Array.from(value.functions.entries()),
+                    calls: value.calls,
+                    imports: value.imports
+                }
+            ])
+        );
+        
         fs.writeFileSync(
             outputFile,
-            JSON.stringify(data, null, 2)
+            JSON.stringify(plainObject, null, 2)
         );
     }
 }
