@@ -18,3 +18,7 @@ npm-debug.log*
 
 # OS
 .DS_Store
+
+output/
+
+test-dir/
