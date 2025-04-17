@@ -5,6 +5,8 @@ import * as path from 'path';
 // Import the module directly without type declaration
 import JavaScript from 'tree-sitter-javascript';
 
+import { logger } from './logger';
+
 // Create a type for the language instance
 type TreeSitterLanguage = Parser.Language & {
     nodeTypeInfo: any;
@@ -173,7 +175,11 @@ export class CodeLensAI {
     (function_declaration
       name: (identifier) @name)) @function
 
-  ;; Exported default anonymous function
+  ;; Exported default anonymous function declaration
+  (export_statement
+    (function_declaration) @function) @default_anon
+
+  ;; Exported default anonymous function expression
   (export_statement
     (function_expression) @function)
 
@@ -191,16 +197,27 @@ export class CodeLensAI {
     name: (identifier) @name
     value: (function_expression)) @function
 
+  ;; Arrow functions inside object literals
+  (pair
+    key: (property_identifier) @name
+    value: (arrow_function)) @function
+
+  ;; IIFE (Immediately Invoked Function Expression)
+  (call_expression
+    function: (parenthesized_expression
+      (function_expression
+        name: (identifier) @name)) @function) @iife
+
   ;; Class declarations
   (class_declaration
     name: (identifier) @name) @class
 
-  ;; Class expressions (e.g., const A = class {})
+  ;; Class expressions
   (variable_declarator
     name: (identifier) @name
     value: (class)) @class
 
-  ;; Method definitions (including static)
+  ;; Method definitions
   (method_definition
     name: (property_identifier) @name) @method
 
@@ -275,14 +292,14 @@ export class CodeLensAI {
 
         await this.performAnalysis(files);
 
-        console.log('parsed files', this.parsedFiles)
+        // console.log('parsed files', this.parsedFiles)
 
-        console.log('Files collected:', files);
+        // console.log('Files collected:', files);
     }
 
 
     private async collectFiles(directory: string, options: { ignoreDirs?: string[], ignoreFiles?: string[] } = {}) {
-        console.log('Collecting files in dir1:', directory);
+        //console.log('Collecting files in dir1:', directory);
         const files: any = [];
 
         const ignoredDirs = new Set(['node_modules', '.git', '.github', 'dist', 'build',
@@ -295,7 +312,7 @@ export class CodeLensAI {
         ]);
 
         const collectFilesRecursive = (dir: string): void => {
-            console.log('Collecting files in dir:', dir);
+            //console.log('Collecting files in dir:', dir);
             const entries = fs.readdirSync(dir, { withFileTypes: true });
 
             for (const entry of entries) {
@@ -376,6 +393,8 @@ export class CodeLensAI {
             imports: []
         });
 
+        logger.writeResults(this.parsedFiles);
+
 
     }
 
@@ -396,7 +415,6 @@ export class CodeLensAI {
             let batchs = files.slice(i, i + batchSize);
             // Parse files
             for (const filePath of batchs) {
-                console.log('Batch:', filePath);
                 await this.parseFile(filePath);
             }
 
@@ -406,11 +424,14 @@ export class CodeLensAI {
                     const parsedFile = this.parsedFiles.get(filePath)!;
 
                     // Extract function declarations
+                    this.extractFunctions(parsedFile);
 
                 }
             }
 
         }
+
+        console.log("nodes", this.nodes)
 
 
 
@@ -425,7 +446,7 @@ export class CodeLensAI {
     private extractFunctions(parsedFile: ParsedFile): void {
         const { path: filePath, language, tree } = parsedFile;
         const query = this.languages[language].queries.functions;
-
+          //console.log("tree", parsedFile)
         try {
             const captures = query.captures(tree.rootNode);
             const classMap = new Map<number, string>();
@@ -465,13 +486,33 @@ export class CodeLensAI {
 
                     // Find function name
                     for (const capture of captures) {
-                        if ((capture.name === 'func_name' || capture.name === 'method_name') &&
+                        if (
+                            capture.name === 'name' &&
                             node.startIndex <= capture.node.startIndex &&
-                            capture.node.endIndex <= node.endIndex) {
+                            capture.node.endIndex <= node.endIndex
+                        ) {
                             funcName = capture.node.text;
                             break;
                         }
                     }
+
+                    if (!funcName) {
+                        if (
+                            node.type === 'arrow_function' || node.type === 'function_declaration' || node.type === 'function_expression'
+                        ) {
+                            // Check if wrapped in an export_statement
+                            let maybeExport = node.parent;
+                            while (maybeExport && maybeExport.type !== 'program') {
+                                if (maybeExport.type === 'export_statement') {
+                                    funcName = 'default'; // or 'export_default_anon'
+                                    break;
+                                }
+                                maybeExport = maybeExport.parent;
+                            }
+                        }
+                    }
+
+                   
 
                     // If it's a method, find the class it belongs to
                     if (name === 'method') {
@@ -537,129 +578,129 @@ export class CodeLensAI {
  * @returns Extracted docstring
  * @private
  */
-private extractDocstring(node: Parser.SyntaxNode, language: string): string {
-    if (!node) return '';
-    
-    try {
-      // Instead of accessing tree.sourcePath (which doesn't exist in Tree-sitter types),
-      // we need to find the file path another way - we'll use our parsing context
-      let filePath: string | undefined;
-      
-      // Find the root node and use it to identify the file
-      const rootNode = node.tree?.rootNode;
-      if (rootNode) {
-        // Match this node's root with our parsed files to find the path
-        for (const [path, parsedFile] of this.parsedFiles.entries()) {
-          if (parsedFile.tree.rootNode === rootNode) {
-            filePath = path;
-            break;
-          }
-        }
-      }
-      
-      if (!filePath || !this.files.has(filePath)) return '';
-      
-      const content = this.files.get(filePath)!.content;
-      //For now we will impl for javascript, python and java
-      // Language-specific docstring extraction
-      switch (language) {
-        case 'javascript':
-          // Look for JSDoc-style comments
-          const jsStart = node.startPosition.row;
-          if (jsStart > 0) {
-            const lines = content.split('\n');
-            const commentLines = [];
-            
-            // Look for comments before the function
-            for (let i = jsStart - 1; i >= Math.max(0, jsStart - 20); i--) {
-              const line = lines[i].trim();
-              
-              // Found the start of a JSDoc block
-              if (line.startsWith('/**')) {
-                commentLines.unshift(line);
-                break;
-              }
-              // Middle of JSDoc block
-              else if (line.startsWith('*')) {
-                commentLines.unshift(line);
-              }
-              // Empty line or regular comment - continue looking
-              else if (line === '' || line.startsWith('//')) {
-                continue;
-              }
-              // End search if we hit code
-              else {
-                break;
-              }
-            }
-            
-            if (commentLines.length > 0) {
-              return commentLines.join('\n');
-            }
-          }
-          break;
-          
-        case 'python':
-          // Look for triple-quoted docstrings in function body
-          if (node.childCount > 0) {
-            const body = node.childCount > 2 ? node.child(2) : null; // Function body in Python
-            
-            if (body && body.childCount > 0) {
-              const firstStatement = body.child(0);
-              
-              if (firstStatement && firstStatement.type === 'expression_statement') {
-                const expr = firstStatement.child(0);
-                
-                if (expr && expr.type === 'string') {
-                  return expr.text.replace(/^(['"])\1\1([\s\S]*)\1\1\1$/, '$2').trim();
+    private extractDocstring(node: Parser.SyntaxNode, language: string): string {
+        if (!node) return '';
+
+        try {
+            // Instead of accessing tree.sourcePath (which doesn't exist in Tree-sitter types),
+            // we need to find the file path another way - we'll use our parsing context
+            let filePath: string | undefined;
+
+            // Find the root node and use it to identify the file
+            const rootNode = node.tree?.rootNode;
+            if (rootNode) {
+                // Match this node's root with our parsed files to find the path
+                for (const [path, parsedFile] of this.parsedFiles.entries()) {
+                    if (parsedFile.tree.rootNode === rootNode) {
+                        filePath = path;
+                        break;
+                    }
                 }
-              }
             }
-          }
-          break;
-          
-        case 'java':
-          // Look for Javadoc comments
-          const javaStart = node.startPosition.row;
-          if (javaStart > 0) {
-            const lines = content.split('\n');
-            const commentLines = [];
-            
-            // Look for comments before the method
-            for (let i = javaStart - 1; i >= Math.max(0, javaStart - 20); i--) {
-              const line = lines[i].trim();
-              
-              // Found the start of a Javadoc block
-              if (line.startsWith('/**')) {
-                commentLines.unshift(line);
-                break;
-              }
-              // Middle of Javadoc block
-              else if (line.startsWith('*')) {
-                commentLines.unshift(line);
-              }
-              // Empty line - continue looking
-              else if (line === '') {
-                continue;
-              }
-              // End search if we hit code
-              else {
-                break;
-              }
+
+            if (!filePath || !this.files.has(filePath)) return '';
+
+            const content = this.files.get(filePath)!.content;
+            //For now we will impl for javascript, python and java
+            // Language-specific docstring extraction
+            switch (language) {
+                case 'javascript':
+                    // Look for JSDoc-style comments
+                    const jsStart = node.startPosition.row;
+                    if (jsStart > 0) {
+                        const lines = content.split('\n');
+                        const commentLines = [];
+
+                        // Look for comments before the function
+                        for (let i = jsStart - 1; i >= Math.max(0, jsStart - 20); i--) {
+                            const line = lines[i].trim();
+
+                            // Found the start of a JSDoc block
+                            if (line.startsWith('/**')) {
+                                commentLines.unshift(line);
+                                break;
+                            }
+                            // Middle of JSDoc block
+                            else if (line.startsWith('*')) {
+                                commentLines.unshift(line);
+                            }
+                            // Empty line or regular comment - continue looking
+                            else if (line === '' || line.startsWith('//')) {
+                                continue;
+                            }
+                            // End search if we hit code
+                            else {
+                                break;
+                            }
+                        }
+
+                        if (commentLines.length > 0) {
+                            return commentLines.join('\n');
+                        }
+                    }
+                    break;
+
+                case 'python':
+                    // Look for triple-quoted docstrings in function body
+                    if (node.childCount > 0) {
+                        const body = node.childCount > 2 ? node.child(2) : null; // Function body in Python
+
+                        if (body && body.childCount > 0) {
+                            const firstStatement = body.child(0);
+
+                            if (firstStatement && firstStatement.type === 'expression_statement') {
+                                const expr = firstStatement.child(0);
+
+                                if (expr && expr.type === 'string') {
+                                    return expr.text.replace(/^(['"])\1\1([\s\S]*)\1\1\1$/, '$2').trim();
+                                }
+                            }
+                        }
+                    }
+                    break;
+
+                case 'java':
+                    // Look for Javadoc comments
+                    const javaStart = node.startPosition.row;
+                    if (javaStart > 0) {
+                        const lines = content.split('\n');
+                        const commentLines = [];
+
+                        // Look for comments before the method
+                        for (let i = javaStart - 1; i >= Math.max(0, javaStart - 20); i--) {
+                            const line = lines[i].trim();
+
+                            // Found the start of a Javadoc block
+                            if (line.startsWith('/**')) {
+                                commentLines.unshift(line);
+                                break;
+                            }
+                            // Middle of Javadoc block
+                            else if (line.startsWith('*')) {
+                                commentLines.unshift(line);
+                            }
+                            // Empty line - continue looking
+                            else if (line === '') {
+                                continue;
+                            }
+                            // End search if we hit code
+                            else {
+                                break;
+                            }
+                        }
+
+                        if (commentLines.length > 0) {
+                            return commentLines.join('\n');
+                        }
+                    }
+                    break;
             }
-            
-            if (commentLines.length > 0) {
-              return commentLines.join('\n');
-            }
-          }
-          break;
-      }
-    } catch (error) {
-      console.error('Error extracting docstring:', (error as Error).message);
+        } catch (error) {
+            console.error('Error extracting docstring:', (error as Error).message);
+        }
+
+        return '';
     }
-    
-    return '';
-  }
 
 }
 
