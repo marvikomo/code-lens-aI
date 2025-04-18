@@ -286,7 +286,7 @@ export class CodeLensAI {
     }
 
     public async analyze(directoryPath: string, options: { ignoreDirs?: string[], ignoreFiles?: string[] } = {}): Promise<void> {
-       //('Analyzing dir:', directoryPath);
+        //('Analyzing dir:', directoryPath);
 
         const files = await this.collectFiles(directoryPath, options);
 
@@ -338,13 +338,13 @@ export class CodeLensAI {
 
     }
 
-       /**
-      * Perform static AST analysis on files
-      * @param files Array of file paths
-      * @private
-      */
+    /**
+   * Perform static AST analysis on files
+   * @param files Array of file paths
+   * @private
+   */
 
-       private async performAnalysis(files: string[]): Promise<void> {
+    private async performAnalysis(files: string[]): Promise<void> {
         console.log('Starting static AST analysis phase...', files);
 
         // Process files in batches to avoid memory issues
@@ -371,11 +371,11 @@ export class CodeLensAI {
 
         }
 
-        
 
-     logger.writeResults(this.nodes, "nodes");
 
-     console.log(this.nodes)
+        //  logger.writeResults(this.nodes, "nodes");
+
+
 
 
 
@@ -437,7 +437,7 @@ export class CodeLensAI {
             imports: []
         });
 
-       // logger.writeResults(this.parsedFiles);
+        // logger.writeResults(this.parsedFiles);
 
 
     }
@@ -451,17 +451,17 @@ export class CodeLensAI {
     private extractFunctions(parsedFile: ParsedFile): void {
         const { path: filePath, language, tree } = parsedFile;
         const query = this.languages[language].queries.functions;
-        
+
         try {
             const captures = query.captures(tree.rootNode);
             const classMap = new Map<number, string>();
 
             // First pass - identify classes
-            for (const { node, name } of captures)  {
+            for (const { node, name } of captures) {
                 if (name === 'class') {
                     let className = '';
                     const classNode = node;
-            
+
                     // Find the identifier inside the class declaration (captured as @name)
                     for (const capture of captures) {
                         if (
@@ -473,15 +473,15 @@ export class CodeLensAI {
                             break;
                         }
                     }
-            
+
                     // Fallback if somehow className isn't found
                     if (!className) {
                         className = node.text; // fallback (not ideal)
                     }
-            
+
                     if (classNode) {
                         classMap.set(classNode.id, className);
-            
+
                         const classId = `${filePath}:${className}`;
                         this.nodes.set(classId, {
                             id: classId,
@@ -498,7 +498,7 @@ export class CodeLensAI {
                 }
             }
 
-           
+
 
             // Second pass - extract functions/methods
             for (const { node, name } of captures) {
@@ -535,8 +535,8 @@ export class CodeLensAI {
                         }
                     }
 
-                   
-       
+
+
                     // If it's a method, find the class it belongs to
                     if (name === 'method') {
                         let current = node.parent;
@@ -549,7 +549,7 @@ export class CodeLensAI {
                             current = current.parent;
                         }
                     }
-          
+
 
                     if (funcName) {
                         // Get docstring/comments if available
@@ -573,7 +573,7 @@ export class CodeLensAI {
 
                         this.nodes.set(funcId, functionNode);
                         parsedFile.functions.set(funcId, functionNode);
-                        
+
                         // If this is a method, create relationship to class
                         if (className) {
                             const classId = `${filePath}:${className}`;
@@ -594,6 +594,129 @@ export class CodeLensAI {
         } catch (error) {
             console.error(`Error extracting functions from ${filePath}:`, (error as Error).message);
         }
+    }
+
+    /**
+  * Extract function calls from a parsed file
+  * @param parsedFile Parsed file object
+  * @private
+  */
+    private extractCalls(parsedFile: ParsedFile): void {
+
+        const { path: filePath, language, tree, functions } = parsedFile;
+        const query = this.languages[language].queries.calls;
+
+        try {
+            // Process each function in the file
+            for (const [funcId, func] of functions.entries()) {
+                if (!func.range) continue;
+
+                // Find function node in tree
+                const startPosition = func.range.start;
+                const endPosition = func.range.end;
+
+                const functionNode = tree.rootNode.descendantForPosition(startPosition, endPosition);
+
+                if (!functionNode) continue;
+
+                // Execute query on function body
+                const captures = query.captures(functionNode);
+
+                // Process calls
+                for (const { node, name } of captures) {
+                    if (name === 'call') {
+                        let callee = '';
+
+                        // Find the callee name
+                        for (const capture of captures) {
+                            if (capture.name === 'callee' &&
+                                node.startIndex <= capture.node.startIndex &&
+                                capture.node.endIndex <= node.endIndex) {
+                                callee = capture.node.text;
+                                break;
+                            }
+                        }
+
+                        if (callee) {
+                            // Create call edge
+                            const edgeId = `${funcId}->CALLS->${callee}`;
+
+                            this.edges.set(edgeId, {
+                                id: edgeId,
+                                from: funcId,
+                                to: callee,
+                                fromName: func.name,
+                                toName: callee,
+                                type: 'CALLS',
+                                source: 'AST-direct',
+                                confidence: 1.0,
+                                range: {
+                                    start: node.startPosition,
+                                    end: node.endPosition
+                                },
+                                file: filePath
+                            });
+
+                            parsedFile.calls.push({
+                                from: func.name,
+                                to: callee,
+                                node: node
+                            });
+                        }
+                    }
+                    else if (name === 'method_call') {
+                        let object = '';
+                        let method = '';
+
+                        // Find object and method names
+                        for (const capture of captures) {
+                            if (capture.name === 'object' &&
+                                node.startIndex <= capture.node.startIndex &&
+                                capture.node.endIndex <= node.endIndex) {
+                                object = capture.node.text;
+                            }
+                            else if (capture.name === 'method' &&
+                                node.startIndex <= capture.node.startIndex &&
+                                capture.node.endIndex <= node.endIndex) {
+                                method = capture.node.text;
+                            }
+                        }
+
+                        if (object && method) {
+                            const callee = `${object}.${method}`;
+
+                            // Create call edge
+                            const edgeId = `${funcId}->CALLS->${callee}`;
+
+                            this.edges.set(edgeId, {
+                                id: edgeId,
+                                from: funcId,
+                                to: callee,
+                                fromName: func.name,
+                                toName: callee,
+                                type: 'CALLS',
+                                source: 'AST-direct',
+                                confidence: 1.0,
+                                range: {
+                                    start: node.startPosition,
+                                    end: node.endPosition
+                                },
+                                file: filePath
+                            });
+
+                            parsedFile.calls.push({
+                                from: func.name,
+                                to: callee,
+                                node: node
+                            });
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            console.error(`Error extracting calls from ${filePath}:`, (error as Error).message);
+        }
+
     }
 
     /**
