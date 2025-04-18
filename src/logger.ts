@@ -11,29 +11,44 @@ export class Logger {
         }
     }
 
-    public writeResults(data: Map<string, any>): void {
-        const timestamp = new Date().toISOString().split('T')[0];
-        const outputFile = path.join(this.outputDir, `analysis_${timestamp}.json`);
-        
-        // Convert Map to a plain object
-        const plainObject = Object.fromEntries(
-            Array.from(data.entries()).map(([key, value]) => [
-                key,
-                {
-                    path: value.path,
-                    language: value.language,
-                    functions: Array.from(value.functions.entries()),
-                    calls: value.calls,
-                    imports: value.imports
-                }
-            ])
-        );
-        
-        fs.writeFileSync(
-            outputFile,
-            JSON.stringify(plainObject, null, 2)
-        );
-    }
+    private deepConvertToObject(obj: any): any {
+        if (obj instanceof Map) {
+          const result: any = {}
+          for (const [key, value] of obj.entries()) {
+            result[key] = this.deepConvertToObject(value)
+          }
+          return result
+        } else if (Array.isArray(obj)) {
+          return obj.map(item => this.deepConvertToObject(item))
+        } else if (typeof obj === 'object' && obj !== null) {
+          const result: any = {}
+          for (const [key, value] of Object.entries(obj)) {
+            result[key] = this.deepConvertToObject(value)
+          }
+          return result
+        }
+        return obj
+      }
+    
+      public writeResults(data: any, key?: string): void {
+        const timestamp = key ?? Date.now().toString()
+        const outputFile = path.join(this.outputDir, `analysis_${timestamp}.json`)
+    
+        const convertedData = this.deepConvertToObject(data)
+    
+        fs.appendFileSync(outputFile, JSON.stringify(convertedData, null, 2) + ',\n', 'utf8');
+        console.log(`Results written to ${outputFile}`)
+      }
+
+      public writeResultsOnce(data: any, key?: string): void {
+        const timestamp = key ?? Date.now().toString()
+        const outputFile = path.join(this.outputDir, `analysis_${timestamp}.json`)
+    
+        const convertedData = this.deepConvertToObject(data)
+    
+        fs.writeFileSync(outputFile, JSON.stringify(convertedData, null, 2), 'utf8')
+        console.log(`Results written to ${outputFile}`)
+      }
 }
 
 export const logger = new Logger();

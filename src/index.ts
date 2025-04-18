@@ -286,7 +286,7 @@ export class CodeLensAI {
     }
 
     public async analyze(directoryPath: string, options: { ignoreDirs?: string[], ignoreFiles?: string[] } = {}): Promise<void> {
-        console.log('Analyzing dir:', directoryPath);
+       //('Analyzing dir:', directoryPath);
 
         const files = await this.collectFiles(directoryPath, options);
 
@@ -337,6 +337,50 @@ export class CodeLensAI {
         return files;
 
     }
+
+       /**
+      * Perform static AST analysis on files
+      * @param files Array of file paths
+      * @private
+      */
+
+       private async performAnalysis(files: string[]): Promise<void> {
+        console.log('Starting static AST analysis phase...', files);
+
+        // Process files in batches to avoid memory issues
+        const batchSize = 50;
+
+        for (let i = 0; i < files.length; i += batchSize) {
+
+            let batchs = files.slice(i, i + batchSize);
+            // Parse files
+            for (const filePath of batchs) {
+                await this.parseFile(filePath);
+            }
+
+            // Analyze parsed files
+            for (const filePath of batchs) {
+                if (this.parsedFiles.has(filePath)) {
+                    const parsedFile = this.parsedFiles.get(filePath)!;
+
+                    // Extract function declarations
+                    this.extractFunctions(parsedFile);
+
+                }
+            }
+
+        }
+
+        
+
+     logger.writeResults(this.nodes, "nodes");
+
+     console.log(this.nodes)
+
+
+
+    }
+
 
 
 
@@ -393,46 +437,7 @@ export class CodeLensAI {
             imports: []
         });
 
-        logger.writeResults(this.parsedFiles);
-
-
-    }
-
-    /**
-      * Perform static AST analysis on files
-      * @param files Array of file paths
-      * @private
-      */
-
-    private async performAnalysis(files: string[]): Promise<void> {
-        console.log('Starting static AST analysis phase...');
-
-        // Process files in batches to avoid memory issues
-        const batchSize = 50;
-
-        for (let i = 0; i < files.length; i += batchSize) {
-
-            let batchs = files.slice(i, i + batchSize);
-            // Parse files
-            for (const filePath of batchs) {
-                await this.parseFile(filePath);
-            }
-
-            // Analyze parsed files
-            for (const filePath of batchs) {
-                if (this.parsedFiles.has(filePath)) {
-                    const parsedFile = this.parsedFiles.get(filePath)!;
-
-                    // Extract function declarations
-                    this.extractFunctions(parsedFile);
-
-                }
-            }
-
-        }
-
-        console.log("nodes", this.nodes)
-
+       // logger.writeResults(this.parsedFiles);
 
 
     }
@@ -446,21 +451,37 @@ export class CodeLensAI {
     private extractFunctions(parsedFile: ParsedFile): void {
         const { path: filePath, language, tree } = parsedFile;
         const query = this.languages[language].queries.functions;
-          //console.log("tree", parsedFile)
+        
         try {
             const captures = query.captures(tree.rootNode);
             const classMap = new Map<number, string>();
 
             // First pass - identify classes
-            for (const { node, name } of captures) {
-                if (name === 'class_name') {
-                    const className = node.text;
-                    const classNode = node.parent;
-
+            for (const { node, name } of captures)  {
+                if (name === 'class') {
+                    let className = '';
+                    const classNode = node;
+            
+                    // Find the identifier inside the class declaration (captured as @name)
+                    for (const capture of captures) {
+                        if (
+                            capture.name === 'name' &&
+                            node.startIndex <= capture.node.startIndex &&
+                            capture.node.endIndex <= node.endIndex
+                        ) {
+                            className = capture.node.text;
+                            break;
+                        }
+                    }
+            
+                    // Fallback if somehow className isn't found
+                    if (!className) {
+                        className = node.text; // fallback (not ideal)
+                    }
+            
                     if (classNode) {
                         classMap.set(classNode.id, className);
-
-                        // Create class node
+            
                         const classId = `${filePath}:${className}`;
                         this.nodes.set(classId, {
                             id: classId,
@@ -470,12 +491,14 @@ export class CodeLensAI {
                             file: filePath,
                             range: {
                                 start: classNode.startPosition,
-                                end: classNode.endPosition
-                            }
+                                end: classNode.endPosition,
+                            },
                         });
                     }
                 }
             }
+
+           
 
             // Second pass - extract functions/methods
             for (const { node, name } of captures) {
@@ -513,18 +536,20 @@ export class CodeLensAI {
                     }
 
                    
-
+       
                     // If it's a method, find the class it belongs to
                     if (name === 'method') {
-                        for (const [nodeId, name] of classMap.entries()) {
-                            const parent = node.parent;
-                            if (parent && parent.parent && parent.parent.id === nodeId) {
-                                className = name;
+                        let current = node.parent;
+                        while (current) {
+                            if (classMap.has(current.id)) {
+                                className = classMap.get(current.id)!;
                                 funcName = `${className}.${funcName}`;
                                 break;
                             }
+                            current = current.parent;
                         }
                     }
+          
 
                     if (funcName) {
                         // Get docstring/comments if available
@@ -548,7 +573,7 @@ export class CodeLensAI {
 
                         this.nodes.set(funcId, functionNode);
                         parsedFile.functions.set(funcId, functionNode);
-
+                        
                         // If this is a method, create relationship to class
                         if (className) {
                             const classId = `${filePath}:${className}`;
