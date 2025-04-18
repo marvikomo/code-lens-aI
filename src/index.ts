@@ -271,16 +271,48 @@ export class CodeLensAI {
    */
     private createJavaScriptCallQuery(): Parser.Query {
         const queryString = `
-          ; Direct function calls
-          (call_expression
-            function: (identifier) @callee) @call
-    
-          ; Method calls
-          (call_expression
-            function: (member_expression
-              object: (identifier) @object
-              property: (property_identifier) @method)) @method_call
-        `;
+;; Direct function calls
+(call_expression
+  function: (identifier) @callee) @call
+
+;; Method calls (obj.method())
+(call_expression
+  function: (member_expression
+    object: (identifier) @object
+    property: (property_identifier) @method)) @method_call
+
+;; Optional chaining (obj?.method())
+(call_expression
+  function: (optional_chain_expression
+    (member_expression
+      object: (_) @object
+      property: (property_identifier) @method))) @method_call
+
+;; Calls from 'this'
+(call_expression
+  function: (member_expression
+    object: (this) @object
+    property: (property_identifier) @method)) @method_call
+
+;; Calls from 'super'
+(call_expression
+  function: (member_expression
+    object: (super) @object
+    property: (property_identifier) @method)) @method_call
+
+;; Computed property access (obj["method"]())
+(call_expression
+  function: (member_expression
+    object: (_) @object
+    property: (computed_property_name (string) @method))) @method_call
+
+;; Chained method calls (foo().bar())
+(call_expression
+  function: (member_expression
+    object: (call_expression) @chained_object
+    property: (property_identifier) @method)) @method_call
+`;
+
 
         return new Parser.Query(this.jsParser.getLanguage(), queryString);
     }
@@ -365,6 +397,9 @@ export class CodeLensAI {
 
                     // Extract function declarations
                     this.extractFunctions(parsedFile);
+
+                    // Extract function calls
+                    this.extractCalls(parsedFile);
 
                 }
             }
@@ -596,6 +631,7 @@ export class CodeLensAI {
         }
     }
 
+
     /**
   * Extract function calls from a parsed file
   * @param parsedFile Parsed file object
@@ -624,8 +660,10 @@ export class CodeLensAI {
 
                 // Process calls
                 for (const { node, name } of captures) {
+                    console.log("name", name);
                     if (name === 'call') {
                         let callee = '';
+
 
                         // Find the callee name
                         for (const capture of captures) {
@@ -636,6 +674,7 @@ export class CodeLensAI {
                                 break;
                             }
                         }
+
 
                         if (callee) {
                             // Create call edge
@@ -681,6 +720,8 @@ export class CodeLensAI {
                                 method = capture.node.text;
                             }
                         }
+
+
 
                         if (object && method) {
                             const callee = `${object}.${method}`;
