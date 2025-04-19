@@ -158,6 +158,24 @@ interface VariableNode extends CodeNode {
     exported?: boolean;
 }
 
+/**
+ * Search result interface
+ */
+export interface SearchResult {
+    id: string;
+    name: string;
+    type: string;
+    language: string;
+    file: string;
+    summary: string;
+    capabilities: string[];
+    score: number;
+    graphContext?: {
+        callers: string[];
+        callees: string[];
+        related: string[];
+    };
+}
 
 /**
  * Parsed file interface
