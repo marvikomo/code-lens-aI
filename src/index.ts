@@ -45,6 +45,24 @@ interface FunctionNode extends CodeNode {
     type: 'function' | 'method';
     className?: string | null;
     docstring?: string;
+    parameters?: ParameterInfo[];
+    returnType?: string;
+    complexity?: number;
+    async?: boolean;
+    generator?: boolean;
+    exported?: boolean;
+    visibility?: 'public' | 'private' | 'protected';
+}
+
+/**
+ * Parameter information
+ */
+interface ParameterInfo {
+    name: string;
+    type?: string;
+    defaultValue?: string;
+    optional: boolean;
+    rest: boolean; // whether it's a rest parameter (...args)
 }
 
 /**
