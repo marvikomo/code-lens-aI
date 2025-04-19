@@ -1,284 +1,20 @@
-import Parser from 'tree-sitter';
+
 import * as fs from 'fs';
 import * as path from 'path';
-// Update the module declaration to match tree-sitter's Language type
-// Import the module directly without type declaration
-import JavaScript from 'tree-sitter-javascript';
+import Parser from 'tree-sitter';
+
 
 import { createHash } from 'crypto';
 
 import { logger } from './logger';
+import { FileInfo, ParsedFile } from './interfaces/file';
+import { CallInfo, CodeEdge, CodeNode, FunctionNode } from './interfaces/code';
+import { TreeSitterParser } from './tree-sitter-parser';
+import { detectLanguage, supportedLanguages } from './languages/supported-languages';
 
-// Create a type for the language instance
-type TreeSitterLanguage = Parser.Language & {
-    nodeTypeInfo: any;
-};
 
 
-interface FileInfo {
-    path: string,
-    language: string,
-    content: string,
-    size: number;
-    lastModified: Date;
-    hash: string;
-}
-/**
- * Node in the code graph
- */
-interface CodeNode {
-    id: string;
-    name: string;
-    type: 'function' | 'method' | 'class' | 'module' | 'package' | 'variable' | 'export';
-    language?: string;
-    file?: string;
-    docstring?: string;
-    className?: string | null;
-    range?: {
-        start: Parser.Point;
-        end: Parser.Point;
-    };
-    metrics?: CodeMetrics;
-    semanticProperties?: SemanticProperties;
-}
 
-/**
- * Semantic properties for enhanced analysis
- */
-interface SemanticProperties {
-    purity: 'pure' | 'impure' | 'unknown'; // Function purity
-    sideEffects: boolean;
-    mutatesParameters: boolean;
-    accessesGlobalState: boolean;
-    throwsExceptions: boolean;
-    categories: string[]; // Inferred categories like 'data processing', 'UI', etc.
-}
-
-/**
- * Code metrics for functions, classes, and files
- */
-interface CodeMetrics {
-    complexity: number; // Cyclomatic complexity
-    linesOfCode: number;
-    commentPercentage: number;
-    parameterCount?: number;
-    nestingDepth: number;
-    cognitiveComplexity?: number;
-}
-
-/**
- * Function/method node
- */
-interface FunctionNode extends CodeNode {
-    type: 'function' | 'method';
-    className?: string | null;
-    docstring?: string;
-    parameters?: ParameterInfo[];
-    returnType?: string;
-    complexity?: number;
-    async?: boolean;
-    generator?: boolean;
-    exported?: boolean;
-    visibility?: 'public' | 'private' | 'protected';
-    // New fields for variables and source code
-    variables?: VariableReference[];  // Variables used in the function
-    sourceCode?: string;
-}
-
-/**
- * Reference to a variable used in a function
- */
-interface VariableReference {
-    name: string;
-    isDeclaration: boolean;  // Whether it's declared in this function
-    isModified: boolean;     // Whether it's modified in this function
-    references: number;      // Number of times it's referenced
-    usageLocations: Parser.Point[];  // Where it's used in the function
-}
-
-/**
- * Parameter information
- */
-interface ParameterInfo {
-    name: string;
-    type?: string;
-    defaultValue?: string;
-    optional: boolean;
-    rest: boolean; // whether it's a rest parameter (...args)
-}
-
-/**
-* Call information
-*/
-interface CallInfo {
-    from: string;
-    to: string;
-    node: Parser.SyntaxNode;
-    argumentCount: number;
-    isDynamic: boolean;
-    confidence: number;
-    isAsync: boolean;
-}
-
-/**
- * Import information
- */
-interface ImportInfo {
-    source: string;
-    specifiers?: string[];
-    default?: string;
-    isTypeOnly?: boolean; // TypeScript type imports
-    importKind: 'static' | 'dynamic'; // static or dynamic import
-    range?: {
-        start: Parser.Point;
-        end: Parser.Point;
-    };
-}
-
-/**
- * Export information
- */
-interface ExportInfo {
-    name: string;
-    source?: string; // For re-exports
-    isDefault: boolean;
-    isTypeOnly?: boolean; // TypeScript type exports
-    range?: {
-        start: Parser.Point;
-        end: Parser.Point;
-    };
-}
-
-/**
- * Class node with enhanced information
- */
-interface ClassNode extends CodeNode {
-    type: 'class';
-    superClass?: string;
-    interfaces?: string[];
-    methods: string[]; // IDs of method nodes
-    properties: VariableNode[];
-    constructorParams?: ParameterInfo[];
-    exported?: boolean;
-}
-
-/**
- * Variable node for tracking variables
- */
-interface VariableNode extends CodeNode {
-    type: 'variable';
-    dataType?: string;
-    mutable: boolean; // const vs let/var
-    initialValue?: string;
-    usages: string[]; // IDs of nodes where this variable is used
-    exported?: boolean;
-}
-
-/**
- * Search result interface
- */
-export interface SearchResult {
-    id: string;
-    name: string;
-    type: string;
-    language: string;
-    file: string;
-    summary: string;
-    capabilities: string[];
-    score: number;
-    graphContext?: {
-        callers: string[];
-        callees: string[];
-        related: string[];
-    };
-}
-
-/**
- * Parsed file interface
- */
-interface ParsedFile {
-    path: string;
-    language: string;
-    tree: Parser.Tree;
-    functions: Map<string, FunctionNode>;
-    classes: Map<string, ClassNode>;
-    variables: Map<string, VariableNode>;
-    calls: Array<CallInfo>;
-    imports: Array<ImportInfo>;
-    exports: Array<ExportInfo>;
-    metrics: FileMetrics;
-    dependsOn: Set<string>; // Files this file depends on
-    dependedOnBy: Set<string>; // Files that depend on this file
-}
-
-/**
- * File-level metrics
- */
-interface FileMetrics extends CodeMetrics {
-    functionCount: number;
-    classCount: number;
-    variableCount: number;
-    importCount: number;
-    exportCount: number;
-    dependencyCount: number;
-    maintainabilityIndex: number; // A calculated index of maintainability
-}
-
-/**
- * Edge in the code graph with enhanced relationship data
- */
-interface CodeEdge {
-    id: string;
-    from: string;
-    to: string;
-    fromName?: string;
-    toName?: string;
-    type: 'CALLS' | 'CALLS_DYNAMIC' | 'IMPORTS' | 'EXPORTS' | 'HAS_METHOD' | 'DEFINED_IN' | 'EXTENDS' | 'IMPLEMENTS' | 'USES' | 'MODIFIES';
-    source: 'AST-direct' | 'AI-inferred' | 'Static-analysis';
-    confidence: number;
-    pattern?: string;
-    reason?: string;
-    file?: string;
-    range?: {
-        start: Parser.Point;
-        end: Parser.Point;
-    };
-}
-
-/**
- * Language configuration interface with enhanced queries
- */
-interface LanguageConfig {
-    extensions: string[];
-    parser: Parser;
-    queries: {
-        functions: Parser.Query;
-        calls: Parser.Query;
-        imports: Parser.Query;
-        exports: Parser.Query;
-        classes: Parser.Query;
-        variables: Parser.Query;
-    };
-}
-
-/**
-* Search result interface
-*/
-export interface SearchResult {
-    id: string;
-    name: string;
-    type: string;
-    language: string;
-    file: string;
-    summary: string;
-    capabilities: string[];
-    score: number;
-    graphContext?: {
-        callers: string[];
-        callees: string[];
-        related: string[];
-    };
-}
 
 export class CodeLensAI {
 
@@ -286,257 +22,23 @@ export class CodeLensAI {
     private edges: Map<string, CodeEdge>;
     private files: Map<string, FileInfo>;
     private parsedFiles: Map<string, ParsedFile>;
-    private languages: Record<string, LanguageConfig>;
-    private jsParser: Parser;
+
+    private parser: TreeSitterParser;
 
     constructor() {
+        this.parser = new TreeSitterParser();
         this.nodes = new Map<string, CodeNode>();
         this.edges = new Map<string, CodeEdge>();
         this.files = new Map<string, FileInfo>();
         this.parsedFiles = new Map<string, ParsedFile>();
-        this.jsParser = new Parser();
-        this.jsParser.setLanguage(JavaScript as TreeSitterLanguage);
-
-        // Initialize language configurations
-        this.languages = {
-            javascript: {
-                extensions: ['.js', '.jsx', '.ts', '.tsx'],
-                parser: this.jsParser,
-                queries: {
-                    functions: this.createJavaScriptFunctionQuery(),
-                    calls: this.createJavaScriptCallQuery(),
-                    imports: this.createJavaScriptImportQuery(),
-                    classes: this.createJavaScriptClassQuery(),
-                    exports: null,
-                    variables: this.createJavaScriptVariableQuery()
-                }
-            }
-        };
     }
 
 
-    /**
-   * Create the JavaScript function query for Tree-sitter
-   * @returns Tree-sitter query for JavaScript functions
-   * @private
-   */
-    private createJavaScriptFunctionQuery(): Parser.Query {
-        const queryString = `
-        ;; Named function declarations
-        (function_declaration
-          name: (identifier) @name) @function
-      
-        ;; Exported named functions
-        (export_statement
-          (function_declaration
-            name: (identifier) @name)) @function
-      
-        ;; Exported default anonymous function declaration
-        (export_statement
-          (function_declaration) @function) @default_anon
-      
-        ;; Exported default anonymous function expression
-        (export_statement
-          (function_expression) @function)
-      
-        ;; Exported default arrow function
-        (export_statement
-          (arrow_function) @function)
-      
-        ;; Arrow functions assigned to variables
-        (variable_declarator
-          name: (identifier) @name
-          value: (arrow_function)) @function
-      
-        ;; Function expressions assigned to variables
-        (variable_declarator
-          name: (identifier) @name
-          value: (function_expression)) @function
-      
-        ;; Arrow functions inside object literals
-        (pair
-          key: (property_identifier) @name
-          value: (arrow_function)) @function
-      
-        ;; IIFE (Immediately Invoked Function Expression)
-        (call_expression
-          function: (parenthesized_expression
-            (function_expression
-              name: (identifier) @name)) @function) @iife
-      
-        ;; Class declarations
-        (class_declaration
-          name: (identifier) @name) @class
-      
-        ;; Class expressions
-        (variable_declarator
-          name: (identifier) @name
-          value: (class)) @class
-      
-        ;; Method definitions
-        (method_definition
-          name: (property_identifier) @name) @method
-      
-        ;; Constructors
-        (method_definition
-          name: (property_identifier) @name
-          (#eq? @name "constructor")) @constructor
-      
-        ;; Object literal methods
-        (pair
-          key: (property_identifier) @name
-          value: (function_expression)) @method
-      `;
-
-
-        return new Parser.Query(JavaScript as TreeSitterLanguage, queryString);
-
-    }
-
-    /**
-    * Create the JavaScript variable query for Tree-sitter
-    */
-    private createJavaScriptVariableQuery(): Parser.Query {
-        const queryString = `
-        ;; Constant declarations
-        (lexical_declaration
-          "const" @const_keyword
-          (variable_declarator
-            name: (identifier) @name)) @const_declaration
-
-        ;; Let declarations
-        (lexical_declaration
-          "let" @let_keyword
-          (variable_declarator
-            name: (identifier) @name)) @let_declaration
-
-        ;; Var declarations
-        (variable_declaration
-          "var" @var_keyword
-          (variable_declarator
-            name: (identifier) @name)) @var_declaration
-
-        ;; Variable with initial value
-        (variable_declarator
-          name: (identifier) @name
-          value: (_) @value) @var_with_value
-
-        ;; Exported variables
-        (export_statement
-          (lexical_declaration
-            (variable_declarator
-              name: (identifier) @name))) @exported_var
-
-        ;; Variable references/usage
-        (identifier) @var_reference
-        `;
-
-        return new Parser.Query(JavaScript as TreeSitterLanguage, queryString);
-    }
-
-
-    /**
-     * Create the JavaScript class query for Tree-sitter
-     */
-    private createJavaScriptClassQuery(): Parser.Query {
-        const queryString = `
-        ;; Class declarations
-        (class_declaration
-          name: (identifier) @name) @class
-    
-        ;; Class expressions
-        (variable_declarator
-          name: (identifier) @name
-          value: (class)) @class_expr
-    
-        ;; Method definitions
-        (method_definition
-          name: (property_identifier) @name) @method
-    
-        ;; Constructor method
-        (method_definition
-          name: (property_identifier) @name
-          (#eq? @name "constructor")) @constructor
-
-          
-        `;
-
-        return new Parser.Query(JavaScript as TreeSitterLanguage, queryString);
-    }
-
-
-    /**
-    * Create the JavaScript import query for Tree-sitter
-    * @returns Tree-sitter query for JavaScript imports
-    * @private
-    */
-    private createJavaScriptImportQuery(): Parser.Query {
-        const queryString = `
-      ; Import statements
-      (import_statement
-        source: (string) @import_source
-        (import_specifier
-          name: (identifier) @import_specifier)?
-        (import_clause
-          (identifier) @import_default)?
-      ) @import_statement
-
-      ; Require statements
-      (call_expression
-        function: (identifier) @require
-        arguments: (arguments (string) @require_path))
-    `;
-
-        return new Parser.Query(this.jsParser.getLanguage(), queryString);
-    }
-
-
-    /**
-   * Create the JavaScript call query for Tree-sitter
-   * @returns Tree-sitter query for JavaScript calls
-   * @private
-   */
-    private createJavaScriptCallQuery(): Parser.Query {
-        const queryString = `
-        ;; Direct function calls like foo()
-        (call_expression
-          function: (identifier) @callee) @call
-    
-        ;; Method calls like obj.method()
-        (call_expression
-          function: (member_expression
-            object: (identifier) @object
-            property: (property_identifier) @method)) @method_call
-    
-        ;; Method calls via this: this.method()
-        (call_expression
-          function: (member_expression
-            object: (this) @object
-            property: (property_identifier) @method)) @method_call
-    
-        ;; Method calls via super: super.method()
-        (call_expression
-          function: (member_expression
-            object: (super) @object
-            property: (property_identifier) @method)) @method_call
-    
-        ;; Chained method call: foo().bar()
-        (call_expression
-          function: (member_expression
-            object: (call_expression) @chained_object
-            property: (property_identifier) @method)) @method_call
-    
-        ;; Computed property access: obj[expr]()
-        (call_expression
-          function: (subscript_expression) @dynamic_call)
-      `;
-
-
-        return new Parser.Query(this.jsParser.getLanguage(), queryString);
-    }
+ 
 
     public async analyze(directoryPath: string, options: { ignoreDirs?: string[], ignoreFiles?: string[] } = {}): Promise<void> {
         //('Analyzing dir:', directoryPath);
+
 
         const files = await this.collectFiles(directoryPath, options);
 
@@ -574,7 +76,7 @@ export class CodeLensAI {
                     }
                 } else if (entry.isFile()) {
                     if (!ignoredFiles.has(entry.name)) {
-                        const language = this.detectLanguage(fullPath);
+                        const language = detectLanguage(fullPath);
                         if (language) {
                             files.push(fullPath);
                         }
@@ -641,23 +143,7 @@ export class CodeLensAI {
 
 
 
-    /**
-  * Detect language from file path
-  * @param filePath Path to the file
-  * @returns Language identifier or null if unsupported
-  * @private
-  */
-    private detectLanguage(filePath: string): string | null {
-        const ext = path.extname(filePath).toLowerCase();
-
-        for (const [language, config] of Object.entries(this.languages)) {
-            if (config.extensions.includes(ext)) {
-                return language;
-            }
-        }
-
-        return null;
-    }
+  
 
     /**
       * Parse a file with the appropriate language parser
@@ -665,15 +151,14 @@ export class CodeLensAI {
       * @private
       */
     private async parseFile(filePath: string): Promise<void> {
-        const language = this.detectLanguage(filePath);
-        if (!language) {
-            console.warn(`Unsupported file type: ${filePath}`);
-            return;
-        }
-        const content = fs.readFileSync(filePath, 'utf8');
+      
+
 
         // Get file metadata
         const stats = fs.statSync(filePath);
+
+        const { language, tree, content } = await this.parser.parseFile(filePath);
+
         const fileHash = this.calculateFileHash(filePath, content);
 
         // Store file info
@@ -687,11 +172,6 @@ export class CodeLensAI {
         };
 
         this.files.set(filePath, fileInfo);
-
-
-        // Parse with Tree-sitter
-        const parser = this.languages[language].parser;
-        const tree = parser.parse(content);
 
         // Initialize parsed file structure
         const parsedFile: ParsedFile = {
@@ -747,7 +227,7 @@ export class CodeLensAI {
  */
     private extractFunctions(parsedFile: ParsedFile): void {
         const { path: filePath, language, tree } = parsedFile;
-        const query = this.languages[language].queries.functions;
+        const query = supportedLanguages[language].queries.functions;
         // Get the file content from your files collection
         const fileInfo = this.files.get(filePath);
         if (!fileInfo) {
@@ -912,9 +392,119 @@ export class CodeLensAI {
                     }
                 }
             }
+
+            // Now extract Express route handlers (app.get, app.post, etc.)
+            this.extractRouteHandlerFunctions(tree.rootNode, parsedFile, fileContent);
         } catch (error) {
             console.error(`Error extracting functions from ${filePath}:`, (error as Error).message);
         }
+    }
+
+
+    /**
+ * Extract Express-style route handler functions
+ * @param rootNode Root node of the file
+ * @param parsedFile Parsed file
+ */
+    private extractRouteHandlerFunctions(rootNode: Parser.SyntaxNode, parsedFile: ParsedFile, fileContent: string): void {
+        const { path: filePath, language } = parsedFile;
+
+        // Helper function to traverse the AST
+        const findRouteHandlers = (node: Parser.SyntaxNode) => {
+            // Check if it's a method call (like app.get, router.post, etc.)
+            if (node.type === 'call_expression') {
+                const functionNode = node.childForFieldName('function');
+
+                if (functionNode && functionNode.type === 'member_expression') {
+                    const objectNode = functionNode.childForFieldName('object');
+                    const propertyNode = functionNode.childForFieldName('property');
+
+                    // Check if it looks like a route definition (app.get, router.post, etc.)
+                    if (objectNode && propertyNode &&
+                        (objectNode.text === 'app' || objectNode.text === 'router') &&
+                        (propertyNode.text === 'get' || propertyNode.text === 'post' ||
+                            propertyNode.text === 'put' || propertyNode.text === 'delete' ||
+                            propertyNode.text === 'use')) {
+
+                        // Get arguments
+                        const argsNode = node.childForFieldName('arguments');
+                        if (argsNode) {
+                            // Look for route handler function (typically the last argument)
+                            let handlerNode: Parser.SyntaxNode | null = null;
+
+                            // Check each argument to find callback function
+                            for (let i = 0; i < argsNode.childCount; i++) {
+                                const argNode = argsNode.child(i);
+                                if (argNode && (
+                                    argNode.type === 'arrow_function' ||
+                                    argNode.type === 'function_expression' ||
+                                    argNode.type === 'function_declaration'
+                                )) {
+                                    handlerNode = argNode;
+                                    break;
+                                }
+                            }
+
+                            // Found a route handler callback function
+                            if (handlerNode) {
+                                // Create a unique ID for this route handler
+                                let routePath = 'unknown-route';
+
+                                // Try to extract the route path from first argument
+                                if (argsNode.childCount > 0) {
+                                    const firstArg = argsNode.child(0);
+                                    if (firstArg && firstArg.type === 'string') {
+                                        routePath = firstArg.text.replace(/['"]/g, '');
+                                    }
+                                }
+
+                                const handlerName = `${objectNode.text}.${propertyNode.text}('${routePath}')`;
+                                const funcId = `${filePath}:${handlerName}`;
+
+                                // Check if handler is async
+                                const isAsync = handlerNode.startPosition.column > 0 &&
+                                    handlerNode.text.substring(0, 5) === 'async';
+
+                                // Get docstring if available
+                                const docstring = this.extractDocstring(handlerNode, language);
+
+                                const sourceCode = fileContent.slice(handlerNode.startIndex, handlerNode.endIndex);
+                                // Create function node for this route handler
+                                const handlerFunc: FunctionNode = {
+                                    id: funcId,
+                                    name: handlerName,
+                                    type: 'function',
+                                    language,
+                                    file: filePath,
+                                    docstring,
+                                    sourceCode,
+                                    async: isAsync,
+                                    range: {
+                                        start: handlerNode.startPosition,
+                                        end: handlerNode.endPosition
+                                    }
+                                };
+
+                                // Add to collections
+                                this.nodes.set(funcId, handlerFunc);
+                                parsedFile.functions.set(funcId, handlerFunc);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Recursively check all children
+            for (let i = 0; i < node.childCount; i++) {
+                const child = node.child(i);
+                if (child) {
+                    findRouteHandlers(child);
+                }
+            }
+        };
+
+        // Start traversal from root node
+        findRouteHandlers(rootNode);
     }
 
 
@@ -925,7 +515,7 @@ export class CodeLensAI {
   */
     private extractCalls(parsedFile: ParsedFile): void {
         const { path: filePath, language, tree, functions } = parsedFile;
-        const query = this.languages[language].queries.calls;
+        const query = supportedLanguages[language].queries.calls;
 
         try {
             // First process function contexts
@@ -1442,7 +1032,7 @@ export class CodeLensAI {
      */
     private processTopLevelCalls(parsedFile: ParsedFile): void {
         const { path: filePath, language, tree } = parsedFile;
-        const query = this.languages[language].queries.calls;
+        const query = supportedLanguages[language].queries.calls;
 
         try {
             // Create a pseudo-function for top-level code
