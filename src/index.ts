@@ -16,7 +16,10 @@ type TreeSitterLanguage = Parser.Language & {
 interface FileInfo {
     path: string,
     language: string,
-    content: string
+    content: string,
+    size: number;
+    lastModified: Date;
+    hash: string; 
 }
 /**
  * Node in the code graph
@@ -271,48 +274,39 @@ export class CodeLensAI {
    */
     private createJavaScriptCallQuery(): Parser.Query {
         const queryString = `
-;; Direct function calls
-(call_expression
-  function: (identifier) @callee) @call
-
-;; Method calls (obj.method())
-(call_expression
-  function: (member_expression
-    object: (identifier) @object
-    property: (property_identifier) @method)) @method_call
-
-;; Optional chaining (obj?.method())
-(call_expression
-  function: (optional_chain_expression
-    (member_expression
-      object: (_) @object
-      property: (property_identifier) @method))) @method_call
-
-;; Calls from 'this'
-(call_expression
-  function: (member_expression
-    object: (this) @object
-    property: (property_identifier) @method)) @method_call
-
-;; Calls from 'super'
-(call_expression
-  function: (member_expression
-    object: (super) @object
-    property: (property_identifier) @method)) @method_call
-
-;; Computed property access (obj["method"]())
-(call_expression
-  function: (member_expression
-    object: (_) @object
-    property: (computed_property_name (string) @method))) @method_call
-
-;; Chained method calls (foo().bar())
-(call_expression
-  function: (member_expression
-    object: (call_expression) @chained_object
-    property: (property_identifier) @method)) @method_call
-`;
-
+        ;; Direct function calls like foo()
+        (call_expression
+          function: (identifier) @callee) @call
+    
+        ;; Method calls like obj.method()
+        (call_expression
+          function: (member_expression
+            object: (identifier) @object
+            property: (property_identifier) @method)) @method_call
+    
+        ;; Method calls via this: this.method()
+        (call_expression
+          function: (member_expression
+            object: (this) @object
+            property: (property_identifier) @method)) @method_call
+    
+        ;; Method calls via super: super.method()
+        (call_expression
+          function: (member_expression
+            object: (super) @object
+            property: (property_identifier) @method)) @method_call
+    
+        ;; Chained method call: foo().bar()
+        (call_expression
+          function: (member_expression
+            object: (call_expression) @chained_object
+            property: (property_identifier) @method)) @method_call
+    
+        ;; Computed property access: obj[expr]()
+        (call_expression
+          function: (subscript_expression) @dynamic_call)
+      `;
+    
 
         return new Parser.Query(this.jsParser.getLanguage(), queryString);
     }
@@ -638,126 +632,119 @@ export class CodeLensAI {
   * @private
   */
     private extractCalls(parsedFile: ParsedFile): void {
-
         const { path: filePath, language, tree, functions } = parsedFile;
         const query = this.languages[language].queries.calls;
 
         try {
-            // Process each function in the file
             for (const [funcId, func] of functions.entries()) {
                 if (!func.range) continue;
 
-                // Find function node in tree
-                const startPosition = func.range.start;
-                const endPosition = func.range.end;
-
-                const functionNode = tree.rootNode.descendantForPosition(startPosition, endPosition);
-
+                const functionNode = tree.rootNode.descendantForPosition(func.range.start, func.range.end);
                 if (!functionNode) continue;
 
-                // Execute query on function body
                 const captures = query.captures(functionNode);
 
-                // Process calls
                 for (const { node, name } of captures) {
-                    console.log("name", name);
+                    let callee = '';
+
+                    console.log("name", name)
+
                     if (name === 'call') {
-                        let callee = '';
-
-
-                        // Find the callee name
                         for (const capture of captures) {
-                            if (capture.name === 'callee' &&
+                            if (
+                                capture.name === 'callee' &&
                                 node.startIndex <= capture.node.startIndex &&
-                                capture.node.endIndex <= node.endIndex) {
+                                capture.node.endIndex <= node.endIndex
+                            ) {
                                 callee = capture.node.text;
                                 break;
                             }
                         }
-
-
-                        if (callee) {
-                            // Create call edge
-                            const edgeId = `${funcId}->CALLS->${callee}`;
-
-                            this.edges.set(edgeId, {
-                                id: edgeId,
-                                from: funcId,
-                                to: callee,
-                                fromName: func.name,
-                                toName: callee,
-                                type: 'CALLS',
-                                source: 'AST-direct',
-                                confidence: 1.0,
-                                range: {
-                                    start: node.startPosition,
-                                    end: node.endPosition
-                                },
-                                file: filePath
-                            });
-
-                            parsedFile.calls.push({
-                                from: func.name,
-                                to: callee,
-                                node: node
-                            });
-                        }
                     }
+
                     else if (name === 'method_call') {
                         let object = '';
                         let method = '';
 
-                        // Find object and method names
                         for (const capture of captures) {
-                            if (capture.name === 'object' &&
+                            if (
+                                capture.name === 'object' &&
                                 node.startIndex <= capture.node.startIndex &&
-                                capture.node.endIndex <= node.endIndex) {
+                                capture.node.endIndex <= node.endIndex
+                            ) {
                                 object = capture.node.text;
-                            }
-                            else if (capture.name === 'method' &&
+                            } else if (
+                                capture.name === 'method' &&
                                 node.startIndex <= capture.node.startIndex &&
-                                capture.node.endIndex <= node.endIndex) {
+                                capture.node.endIndex <= node.endIndex
+                            ) {
                                 method = capture.node.text;
                             }
                         }
 
-
-
                         if (object && method) {
-                            const callee = `${object}.${method}`;
-
-                            // Create call edge
-                            const edgeId = `${funcId}->CALLS->${callee}`;
-
-                            this.edges.set(edgeId, {
-                                id: edgeId,
-                                from: funcId,
-                                to: callee,
-                                fromName: func.name,
-                                toName: callee,
-                                type: 'CALLS',
-                                source: 'AST-direct',
-                                confidence: 1.0,
-                                range: {
-                                    start: node.startPosition,
-                                    end: node.endPosition
-                                },
-                                file: filePath
-                            });
-
-                            parsedFile.calls.push({
-                                from: func.name,
-                                to: callee,
-                                node: node
-                            });
+                            callee = `${object}.${method}`;
+                        } else if (object && !method) {
+                            callee = `${object}.[computed]`;
                         }
                     }
+
+                    else if (name === 'optional_method_call') {
+                        let base = '';
+                        let method = '';
+                        for (const capture of captures) {
+                            if (capture.name === 'object') base = capture.node.text;
+                            if (capture.name === 'method') method = capture.node.text;
+                        }
+                        callee = `${base}?.${method}`;
+                    }
+
+                    else if (name === 'chained_object') {
+                        callee = node.text + '.[chained]';
+                    }
+
+                    else if (name === 'dynamic_call') {
+                        callee = '[dynamic_call]';
+                    }
+
+                    if (callee) {
+                        const edgeId = `${funcId}->CALLS->${callee}`;
+
+                        this.edges.set(edgeId, {
+                            id: edgeId,
+                            from: funcId,
+                            to: callee,
+                            fromName: func.name,
+                            toName: callee,
+                            type: 'CALLS',
+                            source: 'AST-direct',
+                            confidence: 1.0,
+                            range: {
+                                start: node.startPosition,
+                                end: node.endPosition
+                            },
+                            file: filePath
+                        });
+
+                        
+
+                        parsedFile.calls.push({
+                            from: func.name,
+                            to: callee,
+                            node
+                        });
+                    }
                 }
+
+               
             }
+
+           //console.log("parsed", this.parsedFiles)
+            logger.writeResults(this.parsedFiles, "log-parsed-file-after-extract-call");
+            logger.writeResults(this.edges, "log-edges-after-extract-call");
         } catch (error) {
             console.error(`Error extracting calls from ${filePath}:`, (error as Error).message);
         }
-
     }
 
     /**
