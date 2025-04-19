@@ -5,6 +5,8 @@ import * as path from 'path';
 // Import the module directly without type declaration
 import JavaScript from 'tree-sitter-javascript';
 
+import { createHash } from 'crypto';
+
 import { logger } from './logger';
 
 // Create a type for the language instance
@@ -193,6 +195,19 @@ interface ParsedFile {
     metrics: FileMetrics;
     dependsOn: Set<string>; // Files this file depends on
     dependedOnBy: Set<string>; // Files that depend on this file
+}
+
+/**
+ * File-level metrics
+ */
+interface FileMetrics extends CodeMetrics {
+    functionCount: number;
+    classCount: number;
+    variableCount: number;
+    importCount: number;
+    exportCount: number;
+    dependencyCount: number;
+    maintainabilityIndex: number; // A calculated index of maintainability
 }
 
 /**
@@ -563,31 +578,72 @@ export class CodeLensAI {
         }
         const content = fs.readFileSync(filePath, 'utf8');
 
-        // Store file content
-        this.files.set(filePath, {
+         // Get file metadata
+         const stats = fs.statSync(filePath);
+         const fileHash = this.calculateFileHash(filePath, content);
+
+           // Store file info
+        const fileInfo: FileInfo = {
             path: filePath,
             language,
-            content
-        });
+            content,
+            size: stats.size,
+            lastModified: stats.mtime,
+            hash: fileHash
+        };
 
+        this.files.set(filePath, fileInfo);
+
+      
         // Parse with Tree-sitter
         const parser = this.languages[language].parser;
         const tree = parser.parse(content);
 
-        // Store parsed file
-        this.parsedFiles.set(filePath, {
+         // Initialize parsed file structure
+         const parsedFile: ParsedFile = {
             path: filePath,
             language,
             tree,
             functions: new Map(),
+            classes: new Map(),
+            variables: new Map(),
             calls: [],
-            imports: []
-        });
+            imports: [],
+            exports: [],
+            metrics: null,
+            dependsOn: new Set(),
+            dependedOnBy: new Set()
+        };
+
+         // Store parsed file
+         this.parsedFiles.set(filePath, parsedFile);
 
         // logger.writeResults(this.parsedFiles);
 
 
     }
+
+    /**
+ * Calculate a hash for a file's content
+ * @param filePath Path to the file
+ * @param content Optional file content (if already read)
+ * @returns Hash string
+ */
+private calculateFileHash(filePath: string, content?: string): string {
+    try {
+        // If content is not provided, read it from the file
+        const fileContent = content || fs.readFileSync(filePath, 'utf8');
+        
+        // Create hash from content
+        const hash = createHash('sha256');
+        hash.update(fileContent);
+        return hash.digest('hex');
+    } catch (error) {
+        console.error(`Error calculating hash for ${filePath}:`, (error as Error).message);
+        // Return a timestamp-based value as fallback
+        return `ts-${Date.now()}`;
+    }
+}
 
 
     /**
