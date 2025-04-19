@@ -533,6 +533,9 @@ export class CodeLensAI {
 
         }
 
+        logger.writeResults(this.parsedFiles, "Log-after-perform-analysis");
+        logger.writeResults(this.edges, "Log-edges-after-perform-analysis");
+
 
 
         //  logger.writeResults(this.nodes, "nodes");
@@ -831,6 +834,9 @@ private calculateFileHash(filePath: string, content?: string): string {
             
             // Now process calls outside of functions (top-level calls)
             this.processTopLevelCalls(parsedFile);
+
+            logger.writeResults(this.parsedFiles, "Log-after-calls-extraction");
+            logger.writeResults(this.edges, "Log-edges-after-calls-extraction");
             
             // Log processed calls
             console.log(`Extracted ${parsedFile.calls.length} function calls from ${filePath}`);
@@ -1376,136 +1382,188 @@ private processTopLevelCalls(parsedFile: ParsedFile): void {
         console.error(`Error processing top-level calls in ${filePath}:`, (error as Error).message);
     }
 }
-    /**
+
+/**
  * Extract docstring from node by language
  * @param node Tree-sitter node
  * @param language Programming language
  * @returns Extracted docstring
  * @private
  */
-    private extractDocstring(node: Parser.SyntaxNode, language: string): string {
-        if (!node) return '';
+private extractDocstring(node: Parser.SyntaxNode, language: string): string {
+    if (!node) return '';
 
-        try {
-            // Instead of accessing tree.sourcePath (which doesn't exist in Tree-sitter types),
-            // we need to find the file path another way - we'll use our parsing context
-            let filePath: string | undefined;
+    try {
+        // Find the file path
+        let filePath: string | undefined;
 
-            // Find the root node and use it to identify the file
-            const rootNode = node.tree?.rootNode;
-            if (rootNode) {
-                // Match this node's root with our parsed files to find the path
-                for (const [path, parsedFile] of this.parsedFiles.entries()) {
-                    if (parsedFile.tree.rootNode === rootNode) {
-                        filePath = path;
+        // Find the root node and use it to identify the file
+        const rootNode = node.tree?.rootNode;
+        if (rootNode) {
+            // Match this node's root with our parsed files to find the path
+            for (const [path, parsedFile] of this.parsedFiles.entries()) {
+                if (parsedFile.tree.rootNode === rootNode) {
+                    filePath = path;
+                    break;
+                }
+            }
+        }
+
+        if (!filePath || !this.files.has(filePath)) return '';
+
+        const content = this.files.get(filePath)!.content;
+        const lines = content.split('\n');
+        
+        // Get the starting line number of the function/method
+        const startLine = node.startPosition.row;
+        
+        // Look for JSDoc-style comments
+        if (startLine > 0) {
+            const commentLines = [];
+            let inComment = false;
+            let commentStartLine = -1;
+            
+            // Look for comments before the function (up to 20 lines back)
+            for (let i = startLine - 1; i >= Math.max(0, startLine - 20); i--) {
+                const line = lines[i].trim();
+                
+                // Found the end of a JSDoc block
+                if (line.includes('*/')) {
+                    inComment = true;
+                    commentLines.unshift(line);
+                    continue;
+                }
+                // Middle of JSDoc block
+                else if (inComment || line.startsWith('*')) {
+                    inComment = true;
+                    commentLines.unshift(line);
+                    continue;
+                }
+                // Start of JSDoc block
+                else if (line.startsWith('/**')) {
+                    commentLines.unshift(line);
+                    commentStartLine = i;
+                    break;
+                }
+                // Empty line or regular comment - continue looking
+                else if (line === '' || line.startsWith('//')) {
+                    continue;
+                }
+                // End search if we hit code
+                else {
+                    break;
+                }
+            }
+            
+            // If we found a complete JSDoc comment
+            if (commentLines.length > 0 && commentStartLine !== -1) {
+                // Process the comment to extract just the text content
+                return this.processDocstringComment(commentLines.join('\n'));
+            }
+        }
+        
+        // Check for single-line comments immediately preceding the function
+        if (startLine > 0) {
+            const lineComments = [];
+            
+            // Look for consecutive single-line comments
+            for (let i = startLine - 1; i >= Math.max(0, startLine - 10); i--) {
+                const line = lines[i].trim();
+                
+                if (line.startsWith('//')) {
+                    lineComments.unshift(line.substring(2).trim());
+                } else if (line === '') {
+                    // Skip empty lines
+                    continue;
+                } else {
+                    // Break on non-comment code
+                    break;
+                }
+            }
+            
+            if (lineComments.length > 0) {
+                return lineComments.join('\n');
+            }
+        }
+        
+        // For arrow functions or function expressions in variable declarations,
+        // check for comments above the parent statement
+        if (node.type === 'arrow_function' || node.type === 'function_expression') {
+            let parent = node.parent;
+            while (parent && parent.type !== 'program' && 
+                   parent.type !== 'variable_declaration' && 
+                   parent.type !== 'lexical_declaration' &&
+                   parent.type !== 'function_declaration') {
+                parent = parent.parent;
+            }
+            
+            if (parent && parent.startPosition.row > 0) {
+                const parentStart = parent.startPosition.row;
+                const commentLines = [];
+                let inComment = false;
+                
+                // Look for comments before the parent statement
+                for (let i = parentStart - 1; i >= Math.max(0, parentStart - 20); i--) {
+                    const line = lines[i].trim();
+                    
+                    // Found the end of a JSDoc block
+                    if (line.includes('*/')) {
+                        inComment = true;
+                        commentLines.unshift(line);
+                        continue;
+                    }
+                    // Middle of JSDoc block
+                    else if (inComment || line.startsWith('*')) {
+                        inComment = true;
+                        commentLines.unshift(line);
+                        continue;
+                    }
+                    // Start of JSDoc block
+                    else if (line.startsWith('/**')) {
+                        commentLines.unshift(line);
+                        break;
+                    }
+                    // Empty line or regular comment - continue looking
+                    else if (line === '' || line.startsWith('//')) {
+                        continue;
+                    }
+                    // End search if we hit code
+                    else {
                         break;
                     }
                 }
+                
+                if (commentLines.length > 0) {
+                    return this.processDocstringComment(commentLines.join('\n'));
+                }
             }
-
-            if (!filePath || !this.files.has(filePath)) return '';
-
-            const content = this.files.get(filePath)!.content;
-            //For now we will impl for javascript, python and java
-            // Language-specific docstring extraction
-            switch (language) {
-                case 'javascript':
-                    // Look for JSDoc-style comments
-                    const jsStart = node.startPosition.row;
-                    if (jsStart > 0) {
-                        const lines = content.split('\n');
-                        const commentLines = [];
-
-                        // Look for comments before the function
-                        for (let i = jsStart - 1; i >= Math.max(0, jsStart - 20); i--) {
-                            const line = lines[i].trim();
-
-                            // Found the start of a JSDoc block
-                            if (line.startsWith('/**')) {
-                                commentLines.unshift(line);
-                                break;
-                            }
-                            // Middle of JSDoc block
-                            else if (line.startsWith('*')) {
-                                commentLines.unshift(line);
-                            }
-                            // Empty line or regular comment - continue looking
-                            else if (line === '' || line.startsWith('//')) {
-                                continue;
-                            }
-                            // End search if we hit code
-                            else {
-                                break;
-                            }
-                        }
-
-                        if (commentLines.length > 0) {
-                            return commentLines.join('\n');
-                        }
-                    }
-                    break;
-
-                case 'python':
-                    // Look for triple-quoted docstrings in function body
-                    if (node.childCount > 0) {
-                        const body = node.childCount > 2 ? node.child(2) : null; // Function body in Python
-
-                        if (body && body.childCount > 0) {
-                            const firstStatement = body.child(0);
-
-                            if (firstStatement && firstStatement.type === 'expression_statement') {
-                                const expr = firstStatement.child(0);
-
-                                if (expr && expr.type === 'string') {
-                                    return expr.text.replace(/^(['"])\1\1([\s\S]*)\1\1\1$/, '$2').trim();
-                                }
-                            }
-                        }
-                    }
-                    break;
-
-                case 'java':
-                    // Look for Javadoc comments
-                    const javaStart = node.startPosition.row;
-                    if (javaStart > 0) {
-                        const lines = content.split('\n');
-                        const commentLines = [];
-
-                        // Look for comments before the method
-                        for (let i = javaStart - 1; i >= Math.max(0, javaStart - 20); i--) {
-                            const line = lines[i].trim();
-
-                            // Found the start of a Javadoc block
-                            if (line.startsWith('/**')) {
-                                commentLines.unshift(line);
-                                break;
-                            }
-                            // Middle of Javadoc block
-                            else if (line.startsWith('*')) {
-                                commentLines.unshift(line);
-                            }
-                            // Empty line - continue looking
-                            else if (line === '') {
-                                continue;
-                            }
-                            // End search if we hit code
-                            else {
-                                break;
-                            }
-                        }
-
-                        if (commentLines.length > 0) {
-                            return commentLines.join('\n');
-                        }
-                    }
-                    break;
-            }
-        } catch (error) {
-            console.error('Error extracting docstring:', (error as Error).message);
         }
-
-        return '';
+    } catch (error) {
+        console.error('Error extracting docstring:', (error as Error).message);
     }
+
+    return '';
+}
+/**
+ * Process a JSDoc-style comment to extract clean docstring text
+ * @param comment Raw comment with asterisks and slashes
+ * @returns Cleaned docstring text
+ */
+private processDocstringComment(comment: string): string {
+    // Remove the comment start and end markers
+    let text = comment.replace(/\/\*\*|\*\//g, '');
+    
+    // Remove leading asterisks and spaces from each line
+    const lines = text.split('\n');
+    const cleanedLines = lines.map(line => {
+        // Remove leading asterisks and whitespace
+        return line.replace(/^\s*\*\s?/, '');
+    });
+    
+    // Join lines and trim
+    return cleanedLines.join('\n').trim();
+}
+
 
 }
 

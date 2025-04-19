@@ -8,7 +8,7 @@ async function testAnalyze() {
         const codeLens = new CodeLensAI();
         
         // Get the absolute path to the directory you want to analyze
-        const directoryToAnalyze = '/Users/ikponmwosaomorisiagbon/MySites/code-lens-aI/test-dir';
+        const directoryToAnalyze = '/Users/ikponmwosaomorisiagbon/MySites/code-lens-aI/test-dir/test';
         
         console.log('Starting analysis of directory:', directoryToAnalyze);
         
