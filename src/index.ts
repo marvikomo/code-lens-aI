@@ -72,6 +72,10 @@ interface CallInfo {
     from: string;
     to: string;
     node: Parser.SyntaxNode;
+    argumentCount: number;
+    isDynamic: boolean;
+    confidence: number;
+    isAsync: boolean;
 }
 
 /**
