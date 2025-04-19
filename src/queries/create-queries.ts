@@ -46,7 +46,7 @@
    * Create the call query for Tree-sitter
    * @returns Tree-sitter query for JavaScript calls
    */
-    export function createCallQuery(anguage: any, query: any): Parser.Query {
+    export function createCallQuery(language: any, query: any): Parser.Query {
 
-        return new Parser.Query(anguage as TreeSitterLanguage, query);
+        return new Parser.Query(language as TreeSitterLanguage, query);
     }
