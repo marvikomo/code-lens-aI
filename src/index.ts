@@ -32,7 +32,7 @@ export class CodeLensAI {
     private parsedFiles: Map<string, ParsedFile>;
 
     private parser: TreeSitterParser;
-    
+
     private jsParser = new Parser();
     private registry = new LanguageRegistry();
 
@@ -50,7 +50,7 @@ export class CodeLensAI {
                 variables: createVariableQuery(JavaScript as TreeSitterLanguage, VariableQuery),
             }
         });
-        this.parser = new TreeSitterParser(this.jsParser, this.registry);
+        this.parser = new TreeSitterParser(this.registry);
         this.nodes = new Map<string, CodeNode>();
         this.edges = new Map<string, CodeEdge>();
         this.files = new Map<string, FileInfo>();
@@ -58,7 +58,7 @@ export class CodeLensAI {
     }
 
 
- 
+
 
     public async analyze(directoryPath: string, options: { ignoreDirs?: string[], ignoreFiles?: string[] } = {}): Promise<void> {
         //('Analyzing dir:', directoryPath);
@@ -167,7 +167,7 @@ export class CodeLensAI {
 
 
 
-  
+
 
     /**
       * Parse a file with the appropriate language parser
@@ -175,7 +175,7 @@ export class CodeLensAI {
       * @private
       */
     private async parseFile(filePath: string): Promise<void> {
-      
+
 
 
         // Get file metadata

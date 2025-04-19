@@ -1,41 +1,12 @@
 import Parser from 'tree-sitter';
-import JavaScript from 'tree-sitter-javascript';
+
 
 import * as fs from 'fs';
-import * as path from 'path';
 
-import {
-    createFunctionQuery,
-    createVariableQuery,
-    createClassQuery,
-    createImportQuery,
-    createCallQuery
-} from '../queries/create-queries';
 
-import { FunctionQuery, CallQuery, ImportQuery, ClassQuery, VariableQuery } from '../queries/js-query-constants';
+
 import { LanguageRegistry } from '../languages/language-registry';
 
-// Create a type for the language instance
-type TreeSitterLanguage = Parser.Language & {
-    nodeTypeInfo: any;
-};
-
-
-/**
- * Language configuration interface with enhanced queries
- */
-interface LanguageConfig {
-    extensions: string[];
-    parser: Parser;
-    queries: {
-        functions: Parser.Query;
-        calls: Parser.Query;
-        imports: Parser.Query;
-        exports: Parser.Query;
-        classes: Parser.Query;
-        variables: Parser.Query;
-    };
-}
 
 
 
@@ -43,8 +14,8 @@ export class TreeSitterParser {
     private parser: Parser;
     private langRegistry: LanguageRegistry;
 
-    constructor(parser: Parser, languageRegistry: LanguageRegistry) {
-        this.parser = parser;
+    constructor(languageRegistry: LanguageRegistry) {
+
         this.langRegistry = languageRegistry;
     }
 
