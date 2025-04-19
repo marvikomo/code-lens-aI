@@ -27,7 +27,7 @@ interface FileInfo {
 interface CodeNode {
     id: string;
     name: string;
-    type: 'function' | 'method' | 'class' | 'module' | 'package';
+    type: 'function' | 'method' | 'class' | 'module' | 'package' | 'variable' | 'export';
     language?: string;
     file?: string;
     docstring?: string;
@@ -36,6 +36,32 @@ interface CodeNode {
         start: Parser.Point;
         end: Parser.Point;
     };
+    metrics?: CodeMetrics;
+    semanticProperties?: SemanticProperties;
+}
+
+/**
+ * Semantic properties for enhanced analysis
+ */
+interface SemanticProperties {
+    purity: 'pure' | 'impure' | 'unknown'; // Function purity
+    sideEffects: boolean;
+    mutatesParameters: boolean;
+    accessesGlobalState: boolean;
+    throwsExceptions: boolean;
+    categories: string[]; // Inferred categories like 'data processing', 'UI', etc.
+}
+
+/**
+ * Code metrics for functions, classes, and files
+ */
+interface CodeMetrics {
+    complexity: number; // Cyclomatic complexity
+    linesOfCode: number;
+    commentPercentage: number;
+    parameterCount?: number;
+    nestingDepth: number;
+    cognitiveComplexity?: number;
 }
 
 /**
@@ -108,6 +134,32 @@ interface ExportInfo {
 }
 
 /**
+ * Class node with enhanced information
+ */
+interface ClassNode extends CodeNode {
+    type: 'class';
+    superClass?: string;
+    interfaces?: string[];
+    methods: string[]; // IDs of method nodes
+    properties: VariableNode[];
+    constructorParams?: ParameterInfo[];
+    exported?: boolean;
+}
+
+/**
+ * Variable node for tracking variables
+ */
+interface VariableNode extends CodeNode {
+    type: 'variable';
+    dataType?: string;
+    mutable: boolean; // const vs let/var
+    initialValue?: string;
+    usages: string[]; // IDs of nodes where this variable is used
+    exported?: boolean;
+}
+
+
+/**
  * Parsed file interface
  */
 interface ParsedFile {
@@ -115,8 +167,14 @@ interface ParsedFile {
     language: string;
     tree: Parser.Tree;
     functions: Map<string, FunctionNode>;
+    classes: Map<string, ClassNode>;
+    variables: Map<string, VariableNode>;
     calls: Array<CallInfo>;
     imports: Array<ImportInfo>;
+    exports: Array<ExportInfo>;
+    metrics: FileMetrics;
+    dependsOn: Set<string>; // Files this file depends on
+    dependedOnBy: Set<string>; // Files that depend on this file
 }
 
 /**
