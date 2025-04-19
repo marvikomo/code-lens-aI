@@ -85,6 +85,12 @@ interface ImportInfo {
     source: string;
     specifiers?: string[];
     default?: string;
+    isTypeOnly?: boolean; // TypeScript type imports
+    importKind: 'static' | 'dynamic'; // static or dynamic import
+    range?: {
+        start: Parser.Point;
+        end: Parser.Point;
+    };
 }
 
 /**
