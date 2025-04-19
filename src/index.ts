@@ -94,6 +94,20 @@ interface ImportInfo {
 }
 
 /**
+ * Export information
+ */
+interface ExportInfo {
+    name: string;
+    source?: string; // For re-exports
+    isDefault: boolean;
+    isTypeOnly?: boolean; // TypeScript type exports
+    range?: {
+        start: Parser.Point;
+        end: Parser.Point;
+    };
+}
+
+/**
  * Parsed file interface
  */
 interface ParsedFile {
