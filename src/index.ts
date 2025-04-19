@@ -211,16 +211,16 @@ interface FileMetrics extends CodeMetrics {
 }
 
 /**
-* Edge in the code graph
-*/
+ * Edge in the code graph with enhanced relationship data
+ */
 interface CodeEdge {
     id: string;
     from: string;
     to: string;
     fromName?: string;
     toName?: string;
-    type: 'CALLS' | 'CALLS_DYNAMIC' | 'IMPORTS' | 'HAS_METHOD' | 'DEFINED_IN';
-    source: 'AST-direct' | 'AI-inferred';
+    type: 'CALLS' | 'CALLS_DYNAMIC' | 'IMPORTS' | 'EXPORTS' | 'HAS_METHOD' | 'DEFINED_IN' | 'EXTENDS' | 'IMPLEMENTS' | 'USES' | 'MODIFIES';
+    source: 'AST-direct' | 'AI-inferred' | 'Static-analysis';
     confidence: number;
     pattern?: string;
     reason?: string;
@@ -808,119 +808,574 @@ private calculateFileHash(filePath: string, content?: string): string {
     private extractCalls(parsedFile: ParsedFile): void {
         const { path: filePath, language, tree, functions } = parsedFile;
         const query = this.languages[language].queries.calls;
-
+    
         try {
+            // First process function contexts
             for (const [funcId, func] of functions.entries()) {
                 if (!func.range) continue;
-
-                const functionNode = tree.rootNode.descendantForPosition(func.range.start, func.range.end);
+    
+                // Get the function node
+                const functionNode = tree.rootNode.descendantForPosition(
+                    func.range.start, 
+                    func.range.end
+                );
+                
                 if (!functionNode) continue;
-
+    
+                // Get captures for this function body
                 const captures = query.captures(functionNode);
-
-                for (const { node, name } of captures) {
-                    let callee = '';
-
-                    console.log("name", name)
-
-                    if (name === 'call') {
-                        for (const capture of captures) {
-                            if (
-                                capture.name === 'callee' &&
-                                node.startIndex <= capture.node.startIndex &&
-                                capture.node.endIndex <= node.endIndex
-                            ) {
-                                callee = capture.node.text;
-                                break;
-                            }
-                        }
-                    }
-
-                    else if (name === 'method_call') {
-                        let object = '';
-                        let method = '';
-
-                        for (const capture of captures) {
-                            if (
-                                capture.name === 'object' &&
-                                node.startIndex <= capture.node.startIndex &&
-                                capture.node.endIndex <= node.endIndex
-                            ) {
-                                object = capture.node.text;
-                            } else if (
-                                capture.name === 'method' &&
-                                node.startIndex <= capture.node.startIndex &&
-                                capture.node.endIndex <= node.endIndex
-                            ) {
-                                method = capture.node.text;
-                            }
-                        }
-
-                        if (object && method) {
-                            callee = `${object}.${method}`;
-                        } else if (object && !method) {
-                            callee = `${object}.[computed]`;
-                        }
-                    }
-
-                    else if (name === 'optional_method_call') {
-                        let base = '';
-                        let method = '';
-                        for (const capture of captures) {
-                            if (capture.name === 'object') base = capture.node.text;
-                            if (capture.name === 'method') method = capture.node.text;
-                        }
-                        callee = `${base}?.${method}`;
-                    }
-
-                    else if (name === 'chained_object') {
-                        callee = node.text + '.[chained]';
-                    }
-
-                    else if (name === 'dynamic_call') {
-                        callee = '[dynamic_call]';
-                    }
-
-                    if (callee) {
-                        const edgeId = `${funcId}->CALLS->${callee}`;
-
-                        this.edges.set(edgeId, {
-                            id: edgeId,
-                            from: funcId,
-                            to: callee,
-                            fromName: func.name,
-                            toName: callee,
-                            type: 'CALLS',
-                            source: 'AST-direct',
-                            confidence: 1.0,
-                            range: {
-                                start: node.startPosition,
-                                end: node.endPosition
-                            },
-                            file: filePath
-                        });
-
-                        
-
-                        parsedFile.calls.push({
-                            from: func.name,
-                            to: callee,
-                            node
-                        });
-                    }
-                }
-
-               
+                
+                // Process call expressions
+                this.processCallCaptures(captures, funcId, func, parsedFile);
             }
-
-           //console.log("parsed", this.parsedFiles)
-            logger.writeResults(this.parsedFiles, "log-parsed-file-after-extract-call");
-            logger.writeResults(this.edges, "log-edges-after-extract-call");
+            
+            // Now process calls outside of functions (top-level calls)
+            this.processTopLevelCalls(parsedFile);
+            
+            // Log processed calls
+            console.log(`Extracted ${parsedFile.calls.length} function calls from ${filePath}`);
         } catch (error) {
             console.error(`Error extracting calls from ${filePath}:`, (error as Error).message);
         }
     }
 
+    /**
+ * Process call captures within a function context
+ * @param captures Query captures
+ * @param funcId Function ID
+ * @param func Function node
+ * @param parsedFile Parsed file
+ */
+private processCallCaptures(
+    captures: Parser.QueryCapture[], 
+    funcId: string, 
+    func: FunctionNode, 
+    parsedFile: ParsedFile
+): void {
+    const { path: filePath } = parsedFile;
+    
+    // Group captures by parent call node to handle nested structures
+    const callNodeMap = new Map<number, Parser.QueryCapture>();
+    const callInfoMap = new Map<number, {
+        callType: string;
+        callee?: string;
+        object?: string;
+        method?: string;
+        isDynamic: boolean;
+        isAsync: boolean;
+        argumentCount: number;
+    }>();
+    
+    // First identify all call nodes
+    for (const capture of captures) {
+        if (
+            capture.name === 'call' || 
+            capture.name === 'method_call' || 
+            capture.name === 'dynamic_method_call' ||
+            capture.name === 'optional_method_call' ||
+            capture.name === 'iife'
+        ) {
+            callNodeMap.set(capture.node.id, capture);
+        }
+    }
+    
+    // Process each call node to extract call information
+    for (const [nodeId, capture] of callNodeMap.entries()) {
+        const callNode = capture.node;
+        const callType = capture.name;
+        
+        let callee: string | undefined;
+        let object: string | undefined;
+        let method: string | undefined;
+        let isDynamic = callType === 'dynamic_method_call';
+        let isAsync = false;
+        let argumentCount = 0;
+        
+        // Check for direct function calls (identifier)
+        if (callType === 'call') {
+            for (const subCapture of captures) {
+                if (
+                    subCapture.name === 'callee' &&
+                    callNode.startIndex <= subCapture.node.startIndex &&
+                    subCapture.node.endIndex <= callNode.endIndex
+                ) {
+                    callee = subCapture.node.text;
+                    break;
+                }
+            }
+        }
+        
+        // Check for method calls (obj.method())
+        else if (callType === 'method_call' || callType === 'optional_method_call') {
+            for (const subCapture of captures) {
+                if (
+                    subCapture.name === 'object' &&
+                    callNode.startIndex <= subCapture.node.startIndex &&
+                    subCapture.node.endIndex <= callNode.endIndex
+                ) {
+                    object = subCapture.node.text;
+                }
+                else if (
+                    subCapture.name === 'method' &&
+                    callNode.startIndex <= subCapture.node.startIndex &&
+                    subCapture.node.endIndex <= callNode.endIndex
+                ) {
+                    method = subCapture.node.text;
+                }
+            }
+            
+            // Combine object and method
+            if (object && method) {
+                callee = `${object}.${method}`;
+            } else if (object) {
+                callee = `${object}.[computed]`;
+            }
+        }
+        
+        // Check for dynamic method calls (obj[expr]())
+        else if (callType === 'dynamic_method_call') {
+            for (const subCapture of captures) {
+                if (
+                    subCapture.name === 'dynamic_call' &&
+                    callNode.startIndex <= subCapture.node.startIndex &&
+                    subCapture.node.endIndex <= callNode.endIndex
+                ) {
+                    // Try to get the base object
+                    const subscriptNode = subCapture.node;
+                    const objectNode = subscriptNode.childForFieldName('object');
+                    const indexNode = subscriptNode.childForFieldName('index');
+                    
+                    if (objectNode) {
+                        object = objectNode.text;
+                        if (indexNode && indexNode.type === 'string') {
+                            // If the property access is a string literal, we can be more specific
+                            const methodName = indexNode.text.replace(/['"]/g, '');
+                            method = methodName;
+                            callee = `${object}.${methodName}`;
+                            isDynamic = false; // We know exactly what's being called
+                        } else {
+                            callee = `${object}.[dynamic]`;
+                        }
+                    } else {
+                        callee = '[dynamic_call]';
+                    }
+                    break;
+                }
+            }
+        }
+        
+        // Check for IIFE (Immediately Invoked Function Expression)
+        else if (callType === 'iife') {
+            callee = 'IIFE';
+            
+            // Check if it's an async IIFE
+            for (const subCapture of captures) {
+                if (
+                    (subCapture.name === 'iife_func' || subCapture.name === 'iife_arrow') &&
+                    callNode.startIndex <= subCapture.node.startIndex &&
+                    subCapture.node.endIndex <= callNode.endIndex
+                ) {
+                    const funcNode = subCapture.node.childForFieldName('function');
+                    if (funcNode && funcNode.text.includes('async')) {
+                        isAsync = true;
+                    }
+                    break;
+                }
+            }
+        }
+        
+        // Check if this is an awaited call
+        for (const subCapture of captures) {
+            if (
+                subCapture.name === 'await_expr' &&
+                subCapture.node.startIndex <= callNode.startIndex &&
+                callNode.endIndex <= subCapture.node.endIndex
+            ) {
+                isAsync = true;
+                break;
+            }
+        }
+        
+        // Count arguments
+        for (const subCapture of captures) {
+            if (
+                subCapture.name === 'args' &&
+                callNode.startIndex <= subCapture.node.startIndex &&
+                subCapture.node.endIndex <= callNode.endIndex
+            ) {
+                // Count non-empty arguments
+                const argsText = subCapture.node.text;
+                if (argsText.trim()) {
+                    argumentCount = argsText.split(',').filter(arg => arg.trim()).length;
+                }
+                break;
+            }
+        }
+        
+        // Store the call information
+        callInfoMap.set(nodeId, {
+            callType,
+            callee,
+            object,
+            method,
+            isDynamic,
+            isAsync,
+            argumentCount
+        });
+    }
+    
+    // Create call edges
+    for (const [nodeId, callInfo] of callInfoMap.entries()) {
+        const callNode = callNodeMap.get(nodeId)?.node;
+        if (!callNode || !callInfo.callee) continue;
+        
+        // Create call information
+        const callData: CallInfo = {
+            from: func.name,
+            to: callInfo.callee,
+            node: callNode,
+            argumentCount: callInfo.argumentCount,
+            isDynamic: callInfo.isDynamic,
+            confidence: callInfo.isDynamic ? 0.7 : 1.0,
+            isAsync: callInfo.isAsync
+        };
+        
+        // Add to call collection
+        parsedFile.calls.push(callData);
+        
+        // Generate unique edge ID
+        const edgeId = `${funcId}->CALLS->${callInfo.callee}:${callNode.startPosition.row}:${callNode.startPosition.column}`;
+        
+        // Determine edge type based on whether it's dynamic
+        const edgeType = callInfo.isDynamic ? 'CALLS_DYNAMIC' : 'CALLS';
+        
+        // Create the edge
+        this.edges.set(edgeId, {
+            id: edgeId,
+            from: funcId,
+            to: callInfo.callee,
+            fromName: func.name,
+            toName: callInfo.callee,
+            type: edgeType,
+            source: 'AST-direct',
+            confidence: callInfo.isDynamic ? 0.7 : 1.0,
+            file: filePath,
+            range: {
+                start: callNode.startPosition,
+                end: callNode.endPosition
+            }
+        });
+        
+        // If this calls a known function, try to find it by name
+        if (!callInfo.isDynamic) {
+            // Simple case: calling a function in the same file
+            const targetFuncId = `${filePath}:${callInfo.callee}`;
+            
+            if (parsedFile.functions.has(targetFuncId)) {
+                // Update the edge to point to the actual function node
+                const updatedEdgeId = `${funcId}->CALLS->${targetFuncId}`;
+                this.edges.set(updatedEdgeId, {
+                    id: updatedEdgeId,
+                    from: funcId,
+                    to: targetFuncId,
+                    fromName: func.name,
+                    toName: callInfo.callee,
+                    type: 'CALLS',
+                    source: 'AST-direct',
+                    confidence: 1.0,
+                    file: filePath,
+                    range: {
+                        start: callNode.startPosition,
+                        end: callNode.endPosition
+                    }
+                });
+                
+                // Remove the previous edge
+                this.edges.delete(edgeId);
+            } else {
+                // For method calls, check if it's calling a known class method
+                if (callInfo.object && callInfo.method) {
+                    // Try to find any class with this method
+                    for (const [classId, classNode] of parsedFile.classes.entries()) {
+                        for (const methodId of classNode.methods) {
+                            const methodNode = parsedFile.functions.get(methodId);
+                            if (methodNode && methodNode.name.endsWith(`.${callInfo.method}`)) {
+                                // Found a potential target method
+                                const updatedEdgeId = `${funcId}->CALLS->${methodId}`;
+                             
+                                this.edges.set(updatedEdgeId, {
+                                    id: updatedEdgeId,
+                                    from: funcId,
+                                    to: methodId,
+                                    fromName: func.name,
+                                    toName: methodNode.name,
+                                    type: 'CALLS',
+                                    source: 'Static-analysis',
+                                    confidence: 0.8, // Lower confidence since it's inferred
+                                    file: filePath,
+                                    range: {
+                                        start: callNode.startPosition,
+                                        end: callNode.endPosition
+                                    }
+                                });
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Process top-level calls outside of functions
+ * @param parsedFile Parsed file
+ */
+private processTopLevelCalls(parsedFile: ParsedFile): void {
+    const { path: filePath, language, tree } = parsedFile;
+    const query = this.languages[language].queries.calls;
+    
+    try {
+        // Create a pseudo-function for top-level code
+        const moduleId = `${filePath}:module`;
+        const moduleName = path.basename(filePath);
+        
+        // Check if we already created this node
+        if (!this.nodes.has(moduleId)) {
+            const moduleNode: FunctionNode = {
+                id: moduleId,
+                name: moduleName,
+                type: 'function',
+                language,
+                file: filePath,
+                docstring: 'Top-level module code',
+                range: {
+                    start: tree.rootNode.startPosition,
+                    end: tree.rootNode.endPosition
+                }
+            };
+            
+            this.nodes.set(moduleId, moduleNode);
+            parsedFile.functions.set(moduleId, moduleNode);
+        }
+        
+        // Find all top-level call expressions
+        const captures = query.captures(tree.rootNode);
+        const topLevelCallNodes = new Set<number>();
+        
+        // Identify top-level calls (not inside functions)
+        for (const capture of captures) {
+            if (
+                (capture.name === 'call' || 
+                capture.name === 'method_call' || 
+                capture.name === 'dynamic_method_call' ||
+                capture.name === 'optional_method_call' ||
+                capture.name === 'iife')
+            ) {
+                // Check if this call is inside a function
+                let isInsideFunction = false;
+                let current = capture.node.parent;
+                
+                while (current && current !== tree.rootNode) {
+                    if (
+                        current.type === 'function_declaration' || 
+                        current.type === 'function_expression' || 
+                        current.type === 'arrow_function' ||
+                        current.type === 'method_definition'
+                    ) {
+                        isInsideFunction = true;
+                        break;
+                    }
+                    current = current.parent;
+                }
+                
+                if (!isInsideFunction) {
+                    topLevelCallNodes.add(capture.node.id);
+                }
+            }
+        }
+        
+        // Process each top-level call
+        for (const nodeId of topLevelCallNodes) {
+            // Find the call node with matching ID
+            let callNode: Parser.SyntaxNode | null = null;
+            
+            // Helper function to find a node by ID
+            const findNodeById = (node: Parser.SyntaxNode): Parser.SyntaxNode | null => {
+                if (node.id === nodeId) return node;
+                
+                for (let i = 0; i < node.childCount; i++) {
+                    const child = node.child(i);
+                    if (child) {
+                        const found = findNodeById(child);
+                        if (found) return found;
+                    }
+                }
+                
+                return null;
+            };
+            
+            callNode = findNodeById(tree.rootNode);
+            if (!callNode) continue;
+            
+            // Re-run the query on just this call node to get detailed info
+            const callCaptures = query.captures(callNode);
+            
+            let callee: string | undefined;
+            let object: string | undefined;
+            let method: string | undefined;
+            let isDynamic = false;
+            let isAsync = false;
+            let argumentCount = 0;
+            
+            // Determine call type
+            let callType = '';
+            for (const capture of callCaptures) {
+                if (capture.node.id === nodeId) {
+                    callType = capture.name;
+                    break;
+                }
+            }
+            
+            // Extract call details based on type
+            if (callType === 'call') {
+                for (const capture of callCaptures) {
+                    if (capture.name === 'callee') {
+                        callee = capture.node.text;
+                        break;
+                    }
+                }
+            } else if (callType === 'method_call' || callType === 'optional_method_call') {
+                for (const capture of callCaptures) {
+                    if (capture.name === 'object') {
+                        object = capture.node.text;
+                    } else if (capture.name === 'method') {
+                        method = capture.node.text;
+                    }
+                }
+                
+                if (object && method) {
+                    callee = `${object}.${method}`;
+                }
+            } else if (callType === 'dynamic_method_call') {
+                isDynamic = true;
+                for (const capture of callCaptures) {
+                    if (capture.name === 'dynamic_call') {
+                        // Try to extract object
+                        const subscriptNode = capture.node;
+                        const objectNode = subscriptNode.childForFieldName('object');
+                        if (objectNode) {
+                            object = objectNode.text;
+                            callee = `${object}.[dynamic]`;
+                        } else {
+                            callee = '[dynamic_call]';
+                        }
+                        break;
+                    }
+                }
+            } else if (callType === 'iife') {
+                callee = 'IIFE';
+                
+                // Check if it's an async IIFE
+                for (const capture of callCaptures) {
+                    if (capture.name === 'iife_func' || capture.name === 'iife_arrow') {
+                        const funcNode = capture.node.childForFieldName('function');
+                        if (funcNode && funcNode.text.includes('async')) {
+                            isAsync = true;
+                        }
+                        break;
+                    }
+                }
+            }
+            
+            // Check for await
+            for (const capture of callCaptures) {
+                if (capture.name === 'await_expr') {
+                    isAsync = true;
+                    break;
+                }
+            }
+            
+            // Count arguments
+            for (const capture of callCaptures) {
+                if (capture.name === 'args') {
+                    const argsText = capture.node.text;
+                    if (argsText.trim()) {
+                        argumentCount = argsText.split(',').filter(arg => arg.trim()).length;
+                    }
+                    break;
+                }
+            }
+            
+            if (callee) {
+                // Create call information
+                const callData: CallInfo = {
+                    from: moduleName,
+                    to: callee,
+                    node: callNode,
+                    argumentCount,
+                    isDynamic,
+                    confidence: isDynamic ? 0.7 : 1.0,
+                    isAsync
+                };
+                
+                // Add to call collection
+                parsedFile.calls.push(callData);
+                
+                // Generate unique edge ID
+                const edgeId = `${moduleId}->CALLS->${callee}:${callNode.startPosition.row}:${callNode.startPosition.column}`;
+                
+                // Determine edge type based on whether it's dynamic
+                const edgeType = isDynamic ? 'CALLS_DYNAMIC' : 'CALLS';
+                
+                // Create the edge
+                this.edges.set(edgeId, {
+                    id: edgeId,
+                    from: moduleId,
+                    to: callee,
+                    fromName: moduleName,
+                    toName: callee,
+                    type: edgeType,
+                    source: 'AST-direct',
+                    confidence: isDynamic ? 0.7 : 1.0,
+                    file: filePath,
+                    range: {
+                        start: callNode.startPosition,
+                        end: callNode.endPosition
+                    }
+                });
+                
+                // Try to link to actual function
+                const targetFuncId = `${filePath}:${callee}`;
+                if (parsedFile.functions.has(targetFuncId)) {
+                    // Update edge to point to actual function
+                    const updatedEdgeId = `${moduleId}->CALLS->${targetFuncId}`;
+                    this.edges.set(updatedEdgeId, {
+                        id: updatedEdgeId,
+                        from: moduleId,
+                        to: targetFuncId,
+                        fromName: moduleName,
+                        toName: callee,
+                        type: 'CALLS',
+                        source: 'AST-direct',
+                        confidence: 1.0,
+                        file: filePath,
+                        range: {
+                            start: callNode.startPosition,
+                            end: callNode.endPosition
+                        }
+                    });
+                    
+                    // Remove previous edge
+                    this.edges.delete(edgeId);
+                }
+            }
+        }
+    } catch (error) {
+        console.error(`Error processing top-level calls in ${filePath}:`, (error as Error).message);
+    }
+}
     /**
  * Extract docstring from node by language
  * @param node Tree-sitter node
