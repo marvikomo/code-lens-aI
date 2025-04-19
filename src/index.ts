@@ -2,6 +2,12 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import Parser from 'tree-sitter';
+import JavaScript from 'tree-sitter-javascript';
+
+// Create a type for the language instance
+type TreeSitterLanguage = Parser.Language & {
+    nodeTypeInfo: any;
+};
 
 
 import { createHash } from 'crypto';
@@ -10,7 +16,9 @@ import { logger } from './logger';
 import { FileInfo, ParsedFile } from './interfaces/file';
 import { CallInfo, CodeEdge, CodeNode, FunctionNode } from './interfaces/code';
 import { TreeSitterParser } from './tree-sitter-parser';
-import { detectLanguage, supportedLanguages } from './languages/supported-languages';
+import { LanguageRegistry } from './languages/language-registry';
+import { createFunctionQuery, createVariableQuery, createClassQuery, createImportQuery, createCallQuery } from './queries/create-queries';
+import { CallQuery, ClassQuery, FunctionQuery, ImportQuery, VariableQuery } from './queries/js-query-constants';
 
 
 
@@ -24,9 +32,25 @@ export class CodeLensAI {
     private parsedFiles: Map<string, ParsedFile>;
 
     private parser: TreeSitterParser;
+    
+    private jsParser = new Parser();
+    private registry = new LanguageRegistry();
 
     constructor() {
-        this.parser = new TreeSitterParser();
+        this.jsParser.setLanguage(JavaScript as TreeSitterLanguage);
+        this.registry.register('javascript', {
+            extensions: ['.js', '.jsx', '.ts', '.tsx'],
+            parser: this.jsParser,
+            queries: {
+                functions: createFunctionQuery(JavaScript as TreeSitterLanguage, FunctionQuery),
+                calls: createCallQuery(JavaScript as TreeSitterLanguage, CallQuery),
+                imports: createImportQuery(JavaScript as TreeSitterLanguage, ImportQuery),
+                exports: null,
+                classes: createClassQuery(JavaScript as TreeSitterLanguage, ClassQuery),
+                variables: createVariableQuery(JavaScript as TreeSitterLanguage, VariableQuery),
+            }
+        });
+        this.parser = new TreeSitterParser(this.jsParser, this.registry);
         this.nodes = new Map<string, CodeNode>();
         this.edges = new Map<string, CodeEdge>();
         this.files = new Map<string, FileInfo>();
@@ -76,7 +100,7 @@ export class CodeLensAI {
                     }
                 } else if (entry.isFile()) {
                     if (!ignoredFiles.has(entry.name)) {
-                        const language = detectLanguage(fullPath);
+                        const language = this.registry.detect(fullPath);
                         if (language) {
                             files.push(fullPath);
                         }
@@ -227,7 +251,7 @@ export class CodeLensAI {
  */
     private extractFunctions(parsedFile: ParsedFile): void {
         const { path: filePath, language, tree } = parsedFile;
-        const query = supportedLanguages[language].queries.functions;
+        const query = this.registry.get(language).queries.functions;
         // Get the file content from your files collection
         const fileInfo = this.files.get(filePath);
         if (!fileInfo) {
@@ -515,7 +539,7 @@ export class CodeLensAI {
   */
     private extractCalls(parsedFile: ParsedFile): void {
         const { path: filePath, language, tree, functions } = parsedFile;
-        const query = supportedLanguages[language].queries.calls;
+        const query = this.registry.get(language).queries.calls;
 
         try {
             // First process function contexts
@@ -545,6 +569,7 @@ export class CodeLensAI {
             // Log processed calls
             console.log(`Extracted ${parsedFile.calls.length} function calls from ${filePath}`);
         } catch (error) {
+            console.log("error", error);
             console.error(`Error extracting calls from ${filePath}:`, (error as Error).message);
         }
     }
@@ -1032,7 +1057,7 @@ export class CodeLensAI {
      */
     private processTopLevelCalls(parsedFile: ParsedFile): void {
         const { path: filePath, language, tree } = parsedFile;
-        const query = supportedLanguages[language].queries.calls;
+        const query = this.registry.get(language).queries.calls;
 
         try {
             // Create a pseudo-function for top-level code

@@ -11,8 +11,9 @@ import {
     createImportQuery,
     createCallQuery
 } from '../queries/create-queries';
-import { FileInfo, ParsedFile } from '../interfaces/file';
+
 import { FunctionQuery, CallQuery, ImportQuery, ClassQuery, VariableQuery } from '../queries/js-query-constants';
+import { LanguageRegistry } from '../languages/language-registry';
 
 // Create a type for the language instance
 type TreeSitterLanguage = Parser.Language & {
@@ -40,28 +41,11 @@ interface LanguageConfig {
 
 export class TreeSitterParser {
     private parser: Parser;
-    private languages: Record<string, LanguageConfig>;
+    private langRegistry: LanguageRegistry;
 
-    constructor() {
-        this.parser = new Parser();
-        this.parser.setLanguage(JavaScript as TreeSitterLanguage);
-
-        // Initialize language configurations
-        this.languages = {
-            javascript: {
-                extensions: ['.js', '.jsx', '.ts', '.tsx'],
-                parser: this.parser,
-                queries: {
-                    functions: createFunctionQuery(JavaScript, FunctionQuery),
-                    calls: createCallQuery(JavaScript, CallQuery),
-                    imports: createImportQuery(JavaScript, ImportQuery),
-                    classes: createClassQuery(JavaScript, ClassQuery),
-                    exports: null,
-                    variables: createVariableQuery(JavaScript, VariableQuery)
-                }
-            }
-        };
-
+    constructor(parser: Parser, languageRegistry: LanguageRegistry) {
+        this.parser = parser;
+        this.langRegistry = languageRegistry;
     }
 
     public setParser(parser: Parser): void {
@@ -78,7 +62,7 @@ export class TreeSitterParser {
          * @private
          */
     public async parseFile(filePath: string): Promise<any> {
-        const language = this.detectLanguage(filePath);
+        const language = this.langRegistry.detect(filePath);
         if (!language) {
             console.warn(`Unsupported file type: ${filePath}`);
             return;
@@ -86,41 +70,15 @@ export class TreeSitterParser {
         const content = fs.readFileSync(filePath, 'utf8');
 
 
-
-
         // Parse with Tree-sitter
-        const parser = this.languages[language].parser;
+        const parser = this.langRegistry.get(language).parser;
+
         let tree = parser.parse(content);
-
-
         return {
             language,
             tree,
             content
         }
-
-
     }
-
-    /**
-    * Detect language from file path
-    * @param filePath Path to the file
-    * @returns Language identifier or null if unsupported
-    * @private
-    */
-    private detectLanguage(filePath: string): string | null {
-        const ext = path.extname(filePath).toLowerCase();
-
-        for (const [language, config] of Object.entries(this.languages)) {
-            if (config.extensions.includes(ext)) {
-                return language;
-            }
-        }
-
-        return null;
-    }
-
-
-
 
 }
