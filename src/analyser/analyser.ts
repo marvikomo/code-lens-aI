@@ -21,6 +21,8 @@ import { TreeSitterParser } from '../tree-sitter-parser';
 import { LanguageRegistry } from '../languages/language-registry';
 import { createFunctionQuery, createVariableQuery, createClassQuery, createImportQuery, createCallQuery } from '../queries/create-queries';
 import { CallQuery, ClassQuery, FunctionQuery, ImportQuery, VariableQuery } from '../queries/js-query-constants';
+import { FunctionExtractor } from '../extractor/function-extractor';
+import { Extractor } from '../extractor/extractor';
 
 
 
@@ -31,6 +33,7 @@ export class CodeAnalyzer {
     private edges: Map<string, CodeEdge>;
     private files: Map<string, FileInfo>;
     private parsedFiles: Map<string, ParsedFile>;
+    private functionExtractor: Extractor;
 
     private parser: TreeSitterParser;
 
@@ -55,6 +58,8 @@ export class CodeAnalyzer {
                 variables: createVariableQuery(JavaScript as TreeSitterLanguage, VariableQuery),
             }
         });
+
+        this.functionExtractor = new FunctionExtractor(dbClient);
         this.parser = new TreeSitterParser(this.registry);
         this.nodes = new Map<string, CodeNode>();
         this.edges = new Map<string, CodeEdge>();
@@ -135,22 +140,25 @@ export class CodeAnalyzer {
 
             let batchs = files.slice(i, i + batchSize);
             // Parse files
-            for (const filePath of batchs) {
-                await this.parseFile(filePath);
-            }
+            
 
             // Analyze parsed files
             for (const filePath of batchs) {
-                if (this.parsedFiles.has(filePath)) {
-                    const parsedFile = this.parsedFiles.get(filePath)!;
+                const { language, tree, content } = await this.parser.parseFile(filePath);
+            
+                    //const parsedFile = this.parsedFiles.get(filePath)!;
+
+                   const query = this.registry.get(language).queries.functions;
+
+                    await this.functionExtractor.extract(tree, content, filePath, query);
 
                     // Extract function declarations
-                    this.extractFunctions(parsedFile);
+                    // this.extractFunctions(parsedFile);
 
-                    // Extract function calls
-                    this.extractCalls(parsedFile);
+                    // // Extract function calls
+                    // this.extractCalls(parsedFile);
 
-                }
+                
             }
 
         }

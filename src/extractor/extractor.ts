@@ -5,7 +5,15 @@ import { DbSchema } from '../db/schema';
 export abstract class Extractor {
     constructor(protected dbClient: Neo4jClient) {}
 
-    abstract extractClasses(filePath: string): any;
+   /**
+   * Extract entities from a parsed file and store in Neo4j
+   */
+   abstract extract(
+    tree: Parser.Tree, 
+    content: string, 
+    filePath: string, 
+    query: Parser.Query
+  ): Promise<void>;
 
      /**
    * Generate a unique ID for a node within a file
