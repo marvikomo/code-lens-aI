@@ -142,36 +142,36 @@ export const ImportQuery =`
 export const ExportQuery = ``
 
 export const CallQuery  = `
-;; Direct function calls like foo()
+;; All function calls with their context in one comprehensive query
+;; Direct function calls
 (call_expression
   function: (identifier) @callee) @call
 
-;; Method calls like obj.method()
+;; Method calls with object context
 (call_expression
   function: (member_expression
-    object: (identifier) @object
+    object: (_) @object
     property: (property_identifier) @method)) @method_call
 
-;; Method calls via this: this.method()
+;; Nested calls (function calls inside function calls)
 (call_expression
-  function: (member_expression
-    object: (this) @object
-    property: (property_identifier) @method)) @method_call
+  function: (_) @outer_function
+  arguments: (arguments 
+    (call_expression) @nested_call)) @outer_call
 
-;; Method calls via super: super.method()
+;; Immediately Invoked Function Expressions (IIFEs)
 (call_expression
-  function: (member_expression
-    object: (super) @object
-    property: (property_identifier) @method)) @method_call
+  function: [(function_expression) (arrow_function) (parenthesized_expression)] @iife_function) @iife
 
-;; Chained method call: foo().bar()
-(call_expression
-  function: (member_expression
-    object: (call_expression) @chained_object
-    property: (property_identifier) @method)) @method_call
+;; Call expressions in assignment context
+(assignment_expression
+  right: (call_expression) @call_in_assignment) @assignment
 
-;; Computed property access: obj[expr]()
-(call_expression
-  function: (subscript_expression) @dynamic_call)
+;; Call expressions in variable declarations
+(variable_declarator
+  value: (call_expression) @call_in_declaration) @declaration
+
+;; Call expressions in return statements
+(return_statement
+  (call_expression) @call_in_return) @return
 `;
-

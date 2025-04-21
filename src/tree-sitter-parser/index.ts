@@ -3,6 +3,8 @@ import Parser from 'tree-sitter';
 
 import * as fs from 'fs';
 
+import neo4j, { Driver, Session } from 'neo4j-driver';
+
 
 
 import { LanguageRegistry } from '../languages/language-registry';
