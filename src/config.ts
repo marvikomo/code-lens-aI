@@ -1,3 +1,7 @@
+import dotenv from 'dotenv';
+dotenv.config();
+
+
 export const Config = {
     neo4j: {
       uri: process.env.NEO4J_URI || 'neo4j://localhost:7687',

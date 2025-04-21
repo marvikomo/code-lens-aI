@@ -6,6 +6,7 @@ import { Config } from './config';
 
 async function main() {
   try {
+    console.log("config", Config)
     console.log('Starting code analysis...');
     
     // Initialize Neo4j client
