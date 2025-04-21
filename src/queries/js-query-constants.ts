@@ -63,6 +63,16 @@ export const FunctionQuery = `
 (pair
   key: (property_identifier) @name
   value: (function_expression)) @method
+
+;; Object method shorthand
+(method_definition
+  name: (property_identifier) @name) @method
+
+;; Callback arrow functions
+(call_expression
+  arguments: (arguments 
+    (arrow_function) @function))
+
 `;
 
 
