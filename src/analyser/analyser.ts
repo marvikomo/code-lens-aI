@@ -4,7 +4,7 @@ import * as path from 'path';
 import Parser from 'tree-sitter';
 import JavaScript from 'tree-sitter-javascript';
 
-import { Neo4jClient } from './db/neo4j-client';
+import { Neo4jClient } from '../db/neo4j-client';
 
 // Create a type for the language instance
 type TreeSitterLanguage = Parser.Language & {
@@ -14,18 +14,18 @@ type TreeSitterLanguage = Parser.Language & {
 
 import { createHash } from 'crypto';
 
-import { logger } from './logger';
-import { FileInfo, ParsedFile } from './interfaces/file';
-import { CallInfo, CodeEdge, CodeNode, FunctionNode } from './interfaces/code';
-import { TreeSitterParser } from './tree-sitter-parser';
-import { LanguageRegistry } from './languages/language-registry';
-import { createFunctionQuery, createVariableQuery, createClassQuery, createImportQuery, createCallQuery } from './queries/create-queries';
-import { CallQuery, ClassQuery, FunctionQuery, ImportQuery, VariableQuery } from './queries/js-query-constants';
+import { logger } from '../logger';
+import { FileInfo, ParsedFile } from '../interfaces/file';
+import { CallInfo, CodeEdge, CodeNode, FunctionNode } from '../interfaces/code';
+import { TreeSitterParser } from '../tree-sitter-parser';
+import { LanguageRegistry } from '../languages/language-registry';
+import { createFunctionQuery, createVariableQuery, createClassQuery, createImportQuery, createCallQuery } from '../queries/create-queries';
+import { CallQuery, ClassQuery, FunctionQuery, ImportQuery, VariableQuery } from '../queries/js-query-constants';
 
 
 
 
-export class CodeLensAI {
+export class Analyser {
 
     private nodes: Map<string, CodeNode>;
     private edges: Map<string, CodeEdge>;
