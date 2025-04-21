@@ -112,9 +112,12 @@ export class ClassExtractor extends Extractor {
           MATCH (m:${DbSchema.labels.MODULE} {id: $moduleId})
           MERGE (c)-[:${DbSchema.relationships.DEFINED_IN}]->(m)
         `, { classId, moduleId });
+
         
         // Extract and connect methods
         const methods = this.extractMethods(classNode);
+        console.log("classId", classId)
+ 
         for (const method of methods) {
           // Generate method ID
           const methodId = this.generateNodeId(
@@ -124,6 +127,8 @@ export class ClassExtractor extends Extractor {
             method.position.row, 
             method.position.column
           );
+
+       
           
           // Create method node
           await session.run(`

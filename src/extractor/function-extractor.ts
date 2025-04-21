@@ -26,8 +26,6 @@ export class FunctionExtractor extends Extractor {
     // Create function query
   //  const query = createFunctionQuery(tree.getLanguage(), FunctionQuery);
     const matches = query.matches(tree.rootNode);
-
-    console.log('matches', matches)
     
     //Process in batches
     const batchSize = 20;

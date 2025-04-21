@@ -23,6 +23,7 @@ import { createFunctionQuery, createVariableQuery, createClassQuery, createImpor
 import { CallQuery, ClassQuery, FunctionQuery, ImportQuery, VariableQuery } from '../queries/js-query-constants';
 import { FunctionExtractor } from '../extractor/function-extractor';
 import { Extractor } from '../extractor/extractor';
+import { ClassExtractor } from '../extractor/class-extractor';
 
 
 
@@ -34,6 +35,7 @@ export class CodeAnalyzer {
     private files: Map<string, FileInfo>;
     private parsedFiles: Map<string, ParsedFile>;
     private functionExtractor: Extractor;
+    private classExtractor: Extractor;
 
     private parser: TreeSitterParser;
 
@@ -60,6 +62,8 @@ export class CodeAnalyzer {
         });
 
         this.functionExtractor = new FunctionExtractor(dbClient);
+        this.classExtractor = new ClassExtractor(dbClient);
+        
         this.parser = new TreeSitterParser(this.registry);
         this.nodes = new Map<string, CodeNode>();
         this.edges = new Map<string, CodeEdge>();
@@ -148,9 +152,13 @@ export class CodeAnalyzer {
             
                     //const parsedFile = this.parsedFiles.get(filePath)!;
 
-                   const query = this.registry.get(language).queries.functions;
+                   const functionQuery = this.registry.get(language).queries.functions;
+                   const classQuery = this.registry.get(language).queries.classes;
+                   
 
-                    await this.functionExtractor.extract(tree, content, filePath, query);
+                    await this.functionExtractor.extract(tree, content, filePath, functionQuery);
+
+                    await this.classExtractor.extract(tree, content, filePath, classQuery);
 
                     // Extract function declarations
                     // this.extractFunctions(parsedFile);
