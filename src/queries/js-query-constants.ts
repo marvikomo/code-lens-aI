@@ -129,6 +129,13 @@ export const ClassQuery = `
   name: (property_identifier) @name
   (#eq? @name "constructor")) @constructor
 
+;; capture the class _node_ when it’s on the RHS of a var or export
+(variable_declarator
+  name: (identifier) @name
+  value: (class
+    (identifier)?     ; optional inner name
+    body: (class_body) @body) @class_expr)
+
   
 `;
 
