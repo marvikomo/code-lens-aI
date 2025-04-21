@@ -25,7 +25,7 @@ import { CallQuery, ClassQuery, FunctionQuery, ImportQuery, VariableQuery } from
 
 
 
-export class Analyser {
+export class CodeAnalyzer {
 
     private nodes: Map<string, CodeNode>;
     private edges: Map<string, CodeEdge>;
@@ -35,10 +35,14 @@ export class Analyser {
     private parser: TreeSitterParser;
 
     private jsParser = new Parser();
-    private registry = new LanguageRegistry();
+    private registry: LanguageRegistry;
 
-    constructor() {
+    constructor( dbClient: Neo4jClient,
+         languageRegistry: LanguageRegistry) {
+
         this.jsParser.setLanguage(JavaScript as TreeSitterLanguage);
+
+        this.registry = languageRegistry;
         this.registry.register('javascript', {
             extensions: ['.js', '.jsx', '.ts', '.tsx'],
             parser: this.jsParser,
