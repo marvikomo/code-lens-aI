@@ -157,47 +157,27 @@ export const ImportQuery =`
 `;
 
 export const ExportQuery = `[
-  ;; 1) Named exports: export { a, b as c }
+  ;; 1) Named exports: export { a as b, c }
   (export_statement
-    (export_clause
-      (export_specifier
-        name: (identifier)           @orig
-        alias: (identifier)?         @alias
-      )+
-    )
-  ) @named
+     (export_clause
+       (export_specifier
+          name:  (identifier) @orig
+          alias: (identifier)?  @alias
+       )+                     ;; one or more specifiers
+     )
+  ) @named_export
 
-  ;; 2) Default export (named): export default function foo() {…}
+  ;; 2) Default export of a function (named or anonymous)
   (export_statement
-    default: "default"
-    declaration: (function_declaration
-                   name: (identifier)       @defaultName
-                 ) @defaultFn
-  ) 
-
-  ;; 3) Default export (anon fn or arrow): export default () => {…}
-  (export_statement
-    default: "default"
-    declaration: (arrow_function
-                  ) @defaultFn
+     (function_declaration
+       name: (identifier)?   @defaultName
+     ) @default_export
   )
 
-  ;; 4) Re-export named: export { x as y } from "mod"
+  ;; 3) Default export of an arrow function
   (export_statement
-    (export_clause
-      (export_specifier
-        name: (identifier)           @reOrig
-        alias: (identifier)?         @reAlias
-      )+
-    )
-    source: (string)                @source
-  ) @reexport
-
-  ;; 5) Namespace re-export: export * from "mod"
-  (export_statement
-    export_clause: (export_all)    @all
-    source: (string)                @source
-  ) @reexport
+     (arrow_function)      @default_export
+  )
 ]
 `
 
