@@ -156,29 +156,61 @@ export const ImportQuery =`
   arguments: (arguments (string) @require_path))
 `;
 
-export const ExportQuery = `[
-  ;; 1) Named exports: export { a as b, c }
-  (export_statement
-     (export_clause
-       (export_specifier
-          name:  (identifier) @orig
-          alias: (identifier)?  @alias
-       )+                     ;; one or more specifiers
-     )
-  ) @named_export
+export const ExportQuery = `;; Export query for JavaScript/TypeScript
 
-  ;; 2) Default export of a function (named or anonymous)
-  (export_statement
-     (function_declaration
-       name: (identifier)?   @defaultName
-     ) @default_export
-  )
+;; Named exports - export { x, y as z }
+(export_statement
+  (export_clause
+    (export_specifier) @export_specifier)
+) @named_export
 
-  ;; 3) Default export of an arrow function
-  (export_statement
-     (arrow_function)      @default_export
-  )
-]
+;; Default export - export default x
+(export_statement
+  "default" @default_keyword
+  (_) @default_value
+) @default_export
+
+;; Export declaration - export function x() {}, export class X {}, export const x = 1
+(export_statement
+  declaration: (_) @declaration
+) @export_declaration
+
+;; Re-export from - export { x } from 'module'
+(export_statement
+  source: (string) @source
+) @export_from
+
+;; Export all - export * from 'module'
+(export_statement
+  "*" @star
+  source: (string) @source
+) @export_all
+
+;; Extract names for more detailed analysis
+(export_specifier
+  name: (identifier) @export_name
+) @export_spec
+
+;; Extract "as" clauses
+(export_specifier
+  name: (identifier) @original_name
+  "as"
+  alias: (identifier) @alias_name
+) @export_with_alias
+
+;; For declaration exports, extract names
+(function_declaration
+  name: (identifier) @function_name
+) @exported_function
+
+(class_declaration
+  name: (identifier) @class_name
+) @exported_class
+
+(variable_declaration
+  (variable_declarator
+    name: (identifier) @variable_name)
+) @exported_variable
 `
 
 export const CallQuery  = `
