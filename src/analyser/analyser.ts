@@ -19,11 +19,12 @@ import { FileInfo, ParsedFile } from '../interfaces/file';
 import { CallInfo, CodeEdge, CodeNode, FunctionNode } from '../interfaces/code';
 import { TreeSitterParser } from '../tree-sitter-parser';
 import { LanguageRegistry } from '../languages/language-registry';
-import { createFunctionQuery, createVariableQuery, createClassQuery, createImportQuery, createCallQuery } from '../queries/create-queries';
-import { CallQuery, ClassQuery, FunctionQuery, ImportQuery, VariableQuery } from '../queries/js-query-constants';
+import { createQuery } from '../queries/create-queries';
+import { CallQuery, ClassQuery, FunctionQuery, ImportQuery, VariableQuery, ExportQuery } from '../queries/js-query-constants';
 import { FunctionExtractor } from '../extractor/function-extractor';
 import { Extractor } from '../extractor/extractor';
 import { ClassExtractor } from '../extractor/class-extractor';
+import { ImportExtractor } from '../extractor/import-extractor';
 
 
 
@@ -36,6 +37,7 @@ export class CodeAnalyzer {
     private parsedFiles: Map<string, ParsedFile>;
     private functionExtractor: Extractor;
     private classExtractor: Extractor;
+    private importExtractor: Extractor;
 
     private parser: TreeSitterParser;
 
@@ -52,17 +54,18 @@ export class CodeAnalyzer {
             extensions: ['.js', '.jsx', '.ts', '.tsx'],
             parser: this.jsParser,
             queries: {
-                functions: createFunctionQuery(JavaScript as TreeSitterLanguage, FunctionQuery),
-                calls: createCallQuery(JavaScript as TreeSitterLanguage, CallQuery),
-                imports: createImportQuery(JavaScript as TreeSitterLanguage, ImportQuery),
-                exports: null,
-                classes: createClassQuery(JavaScript as TreeSitterLanguage, ClassQuery),
-                variables: createVariableQuery(JavaScript as TreeSitterLanguage, VariableQuery),
+                functions: createQuery(JavaScript as TreeSitterLanguage, FunctionQuery),
+                calls: createQuery(JavaScript as TreeSitterLanguage, CallQuery),
+                imports: createQuery(JavaScript as TreeSitterLanguage, ImportQuery),
+                exports: createQuery(JavaScript as TreeSitterLanguage, ExportQuery),
+                classes: createQuery(JavaScript as TreeSitterLanguage, ClassQuery),
+                variables: createQuery(JavaScript as TreeSitterLanguage, VariableQuery),
             }
         });
 
         this.functionExtractor = new FunctionExtractor(dbClient);
         this.classExtractor = new ClassExtractor(dbClient);
+        this.importExtractor = new ImportExtractor(dbClient);
         
         this.parser = new TreeSitterParser(this.registry);
         this.nodes = new Map<string, CodeNode>();
@@ -154,11 +157,14 @@ export class CodeAnalyzer {
 
                    const functionQuery = this.registry.get(language).queries.functions;
                    const classQuery = this.registry.get(language).queries.classes;
+                   const importQuery = this.registry.get(language).queries.imports;
                    
 
                     await this.functionExtractor.extract(tree, content, filePath, functionQuery);
 
-                    await this.classExtractor.extract(tree, content, filePath, classQuery);
+                     await this.classExtractor.extract(tree, content, filePath, classQuery);
+
+                     await this.importExtractor.extract(tree, content, filePath, importQuery);
 
                     // Extract function declarations
                     // this.extractFunctions(parsedFile);

@@ -2,8 +2,8 @@ import Parser from 'tree-sitter';
 import { Extractor } from './extractor';
 import { Neo4jClient } from '../db/neo4j-client';
 import { DbSchema } from '../db/schema';
-import { createFunctionQuery } from '../queries/create-queries';
-import { FunctionQuery } from '../queries/js-query-constants';
+
+import { logger } from '../logger';
 
 export class FunctionExtractor extends Extractor {
   
@@ -24,8 +24,9 @@ export class FunctionExtractor extends Extractor {
     await this.ensureModuleNode(filePath);
     
     // Create function query
-  //  const query = createFunctionQuery(tree.getLanguage(), FunctionQuery);
     const matches = query.matches(tree.rootNode);
+
+    logger.writeResults(matches, "matches");
     
     //Process in batches
     const batchSize = 20;

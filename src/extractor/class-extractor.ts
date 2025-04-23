@@ -3,8 +3,6 @@ import Parser from 'tree-sitter';
 import { Extractor } from './extractor';
 import { Neo4jClient } from '../db/neo4j-client';
 import { DbSchema } from '../db/schema';
-import { createClassQuery } from '../queries/create-queries';
-import { ClassQuery } from '../queries/js-query-constants';
 
 export class ClassExtractor extends Extractor {
   constructor(dbClient: Neo4jClient) {
@@ -115,7 +113,7 @@ export class ClassExtractor extends Extractor {
 
         
         // Extract and connect methods
-        const methods = this.extractMethods(classNode);
+        const methods = this.extractMethods(classNode, content);
         console.log("classId", classId)
  
         for (const method of methods) {
@@ -139,6 +137,7 @@ export class ClassExtractor extends Extractor {
               f.lineEnd = $lineEnd,
               f.columnStart = $columnStart,
               f.columnEnd = $columnEnd,
+              f.sourceCode = $sourceCode,
               f.isMethod = true,
               f.isConstructor = $isConstructor,
               f.parameters = $parameters,
@@ -149,6 +148,7 @@ export class ClassExtractor extends Extractor {
               f.lineEnd = $lineEnd,
               f.columnStart = $columnStart,
               f.columnEnd = $columnEnd,
+              f.sourceCode = $sourceCode,
               f.isMethod = true,
               f.isConstructor = $isConstructor,
               f.parameters = $parameters,
@@ -161,7 +161,8 @@ export class ClassExtractor extends Extractor {
             columnStart: method.position.column,
             columnEnd: method.endPosition.column,
             isConstructor: method.name === 'constructor',
-            parameters: method.parameters || []
+            parameters: method.parameters || [],
+            sourceCode: method.source
           });
           
           // Create relationship between class and method
@@ -260,11 +261,12 @@ export class ClassExtractor extends Extractor {
    /**
    * Extract methods from a class node
    */
-   private extractMethods(classNode: Parser.SyntaxNode): Array<{
+   private extractMethods(classNode: Parser.SyntaxNode,  fileContent: string): Array<{
     name: string;
     position: Parser.Point;
     endPosition: Parser.Point;
     parameters?: string[];
+    source: string;
   }> {
     try {
       const methods: Array<{
@@ -272,6 +274,7 @@ export class ClassExtractor extends Extractor {
         position: Parser.Point;
         endPosition: Parser.Point;
         parameters?: string[];
+        source: string;
       }> = [];
       
       // Find class body
@@ -304,12 +307,15 @@ export class ClassExtractor extends Extractor {
               .filter(p => p.type === 'identifier' || p.type === 'pattern')
               .map(p => p.text);
           }
+
+          const source = fileContent.slice(child.startIndex, child.endIndex);
           
           methods.push({
             name: nameNode.text,
             position: nameNode.startPosition,
             endPosition: child.endPosition,
-            parameters
+            parameters,
+            source
           });
         }
       }

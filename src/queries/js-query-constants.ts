@@ -8,6 +8,11 @@ export const FunctionQuery = `
   (function_declaration
     name: (identifier) @name)) @function
 
+;; Arrow functions assigned to variables
+(variable_declarator
+  name: (identifier) @name
+  value: (arrow_function)) @function
+
 ;; Exported default anonymous function declaration
 (export_statement
   (function_declaration) @function) @default_anon
@@ -19,11 +24,6 @@ export const FunctionQuery = `
 ;; Exported default arrow function
 (export_statement
   (arrow_function) @function)
-
-;; Arrow functions assigned to variables
-(variable_declarator
-  name: (identifier) @name
-  value: (arrow_function)) @function
 
 ;; Function expressions assigned to variables
 (variable_declarator
@@ -156,7 +156,50 @@ export const ImportQuery =`
   arguments: (arguments (string) @require_path))
 `;
 
-export const ExportQuery = ``
+export const ExportQuery = `[
+  ;; 1) Named exports: export { a, b as c }
+  (export_statement
+    (export_clause
+      (export_specifier
+        name: (identifier)           @orig
+        alias: (identifier)?         @alias
+      )+
+    )
+  ) @named
+
+  ;; 2) Default export (named): export default function foo() {…}
+  (export_statement
+    default: "default"
+    declaration: (function_declaration
+                   name: (identifier)       @defaultName
+                 ) @defaultFn
+  ) 
+
+  ;; 3) Default export (anon fn or arrow): export default () => {…}
+  (export_statement
+    default: "default"
+    declaration: (arrow_function
+                  ) @defaultFn
+  )
+
+  ;; 4) Re-export named: export { x as y } from "mod"
+  (export_statement
+    (export_clause
+      (export_specifier
+        name: (identifier)           @reOrig
+        alias: (identifier)?         @reAlias
+      )+
+    )
+    source: (string)                @source
+  ) @reexport
+
+  ;; 5) Namespace re-export: export * from "mod"
+  (export_statement
+    export_clause: (export_all)    @all
+    source: (string)                @source
+  ) @reexport
+]
+`
 
 export const CallQuery  = `
 ;; All function calls with their context in one comprehensive query
