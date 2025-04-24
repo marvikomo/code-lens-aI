@@ -24,8 +24,6 @@ export class ExportExtractor extends Extractor {
       let exportType = 'unknown';
       let exportNode = null;
       let sourceNode = null;
-      //console.log("file", filePath)
-      //console.log("mx", match)
     
 
       // Determine export type and get nodes
@@ -123,7 +121,6 @@ export class ExportExtractor extends Extractor {
       // For re-exports, extract specifiers if any
       else if (exportType === 're-export' && sourceNode) {
         const exportNames = this.extractExportSpecifiers(exportNode);
-        console.log("export names", exportNames)
 
         // If no specifiers, it's an "export * from"
         if (exportNames.length === 0) {
