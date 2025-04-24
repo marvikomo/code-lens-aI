@@ -162,7 +162,7 @@ export const ExportQuery = `;; Export query for JavaScript/TypeScript
 (export_statement
   (export_clause
     (export_specifier) @export_specifier)
-) @named_export
+  !source) @named_export
 
 ;; Default export - export default x
 (export_statement

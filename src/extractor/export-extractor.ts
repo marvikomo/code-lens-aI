@@ -19,17 +19,25 @@ export class ExportExtractor extends Extractor {
 
     // Create export query
     const matches = query.matches(tree.rootNode);
-
     // Extract export information to simple objects
     const exports = matches.flatMap(match => {
       let exportType = 'unknown';
       let exportNode = null;
       let sourceNode = null;
+      //console.log("file", filePath)
+      //console.log("mx", match)
+    
 
       // Determine export type and get nodes
       if (match.captures.some(c => c.name === 'named_export')) {
         exportType = 'named';
         exportNode = match.captures.find(c => c.name === 'named_export')?.node;
+        // Check if this is actually a re-export
+        sourceNode = match.captures.find(c => c.name === 'source')?.node;
+        if (sourceNode) {
+          // This is a named re-export
+          exportType = 're-export';
+        }
       } else if (match.captures.some(c => c.name === 'default_export')) {
         exportType = 'default';
         exportNode = match.captures.find(c => c.name === 'default_export')?.node;
@@ -37,6 +45,10 @@ export class ExportExtractor extends Extractor {
         exportType = 're-export';
         exportNode = match.captures.find(c => c.name === 'export_from')?.node;
         sourceNode = match.captures.find(c => c.name === 'source')?.node;
+        if (sourceNode) {
+          // This is a named re-export
+          exportType = 're-export';
+        }
       } else if (match.captures.some(c => c.name === 'export_all')) {
         exportType = 'export-all';
         exportNode = match.captures.find(c => c.name === 'export_all')?.node;
@@ -80,6 +92,12 @@ export class ExportExtractor extends Extractor {
 
       // For named exports, extract specifiers
       if (exportType === 'named') {
+       
+      //    if(match.captures[0].node.startPosition.row == 82) {
+      //   console.log("mx", match.captures[0].node.children[3].text)
+      //   console.log("export type", exportType)
+      //   console.log("export node", sourceNode)
+      // }
         const exportNames = this.extractExportSpecifiers(exportNode);
 
         // Create an export object for each name
@@ -101,9 +119,11 @@ export class ExportExtractor extends Extractor {
           isDefault: true
         });
       }
+
       // For re-exports, extract specifiers if any
       else if (exportType === 're-export' && sourceNode) {
         const exportNames = this.extractExportSpecifiers(exportNode);
+        console.log("export names", exportNames)
 
         // If no specifiers, it's an "export * from"
         if (exportNames.length === 0) {
@@ -111,7 +131,7 @@ export class ExportExtractor extends Extractor {
             ...baseExportData,
             name: '*',
             isNamespaceExport: true,
-            isReExport: true 
+            isReExport: true
           });
         } else {
           // Create an export object for each name
@@ -128,6 +148,7 @@ export class ExportExtractor extends Extractor {
       }
       // For export-all, just one entry
       else if (exportType === 'export-all' && sourceNode) {
+        
         results.push({
           ...baseExportData,
           name: '*',
@@ -146,7 +167,9 @@ export class ExportExtractor extends Extractor {
 
       return results;
     });
-    
+
+    //console.log("exports", exports)
+
     logger.writeResults(exports, 'export');
     // Batch upload exports to Neo4j
     await this.batchUploadExports(exports);
@@ -160,12 +183,12 @@ export class ExportExtractor extends Extractor {
 
   private async batchUploadExports(exports: any[]): Promise<void> {
     if (exports.length === 0) return;
-    
+
     // Process in smaller batches to avoid query complexity
     const batchSize = 25;
     for (let i = 0; i < exports.length; i += batchSize) {
       const batch = exports.slice(i, i + batchSize);
-      
+
       // 1. First, create all Export nodes and connect to modules
       await this.dbClient.query(`
         UNWIND $exports as export
@@ -184,6 +207,7 @@ export class ExportExtractor extends Extractor {
           exp.isReExport = COALESCE(export.isReExport, false),
           exp.isDeclaration = COALESCE(export.isDeclaration, false),
           exp.sourceText = export.sourceText,
+          exp.sourceCode = export.text,
           exp.line = export.line,
           exp.column = export.column,
           exp.createdAt = timestamp()
@@ -191,14 +215,14 @@ export class ExportExtractor extends Extractor {
         // Connect export to source module
         MERGE (module)-[rel:${DbSchema.relationships.EXPORTS}]->(exp)
       `, { exports: batch });
-      
+
       // 2. Process node module re-exports
-      const nodeModuleReExports = batch.filter(exp => 
-        exp.sourceText !== null && 
-        !exp.sourceText.startsWith('.') && 
+      const nodeModuleReExports = batch.filter(exp =>
+        exp.sourceText !== null &&
+        !exp.sourceText.startsWith('.') &&
         !exp.sourceText.startsWith('/')
       );
-      
+
       if (nodeModuleReExports.length > 0) {
         await this.dbClient.query(`
           UNWIND $exports as export
@@ -223,13 +247,13 @@ export class ExportExtractor extends Extractor {
           }]->(extMod)
         `, { exports: nodeModuleReExports });
       }
-      
+
       // 3. Process local re-exports
-      const localReExports = batch.filter(exp => 
-        exp.sourceText !== null && 
+      const localReExports = batch.filter(exp =>
+        exp.sourceText !== null &&
         (exp.sourceText.startsWith('.') || exp.sourceText.startsWith('/'))
       );
-      
+
       if (localReExports.length > 0) {
         // Handle finding target modules
         await this.dbClient.query(`
@@ -266,7 +290,7 @@ export class ExportExtractor extends Extractor {
             }]->(placeholderMod)
           )
         `, { exports: localReExports });
-        
+
         // Handle namespace re-exports separately
         const namespaceReExports = localReExports.filter(exp => exp.isNamespaceExport);
         if (namespaceReExports.length > 0) {
@@ -299,7 +323,7 @@ export class ExportExtractor extends Extractor {
           `, { exports: namespaceReExports });
         }
       }
-      
+
       // 4. Connect regular exports to entities
       const normalExports = batch.filter(exp => exp.sourceText === null && !exp.isNamespaceExport);
       if (normalExports.length > 0) {
@@ -323,7 +347,7 @@ export class ExportExtractor extends Extractor {
         `, { exports: normalExports });
       }
     }
-    
+
     console.log(`Processed ${exports.length} exports`);
   }
 
@@ -376,115 +400,115 @@ export class ExportExtractor extends Extractor {
     }
   }
 
- /**
- * Find an identifier in a node (for export declarations)
- */
-private findIdentifier(node: Parser.SyntaxNode): string | null {
-  try {
-    // For export declarations like "export const x = ..."
-    if (node.type === 'export_declaration' || node.text.startsWith('export ')) {
-      // Look for variable declarations
-      const declarationNode = node.children.find(child => 
-        child.type === 'variable_declaration' || 
-        child.type === 'lexical_declaration'
-      );
-      
-      if (declarationNode) {
-        // Find variable declarator
-        const declaratorNode = declarationNode.children.find(child => 
-          child.type === 'variable_declarator'
+  /**
+  * Find an identifier in a node (for export declarations)
+  */
+  private findIdentifier(node: Parser.SyntaxNode): string | null {
+    try {
+      // For export declarations like "export const x = ..."
+      if (node.type === 'export_declaration' || node.text.startsWith('export ')) {
+        // Look for variable declarations
+        const declarationNode = node.children.find(child =>
+          child.type === 'variable_declaration' ||
+          child.type === 'lexical_declaration'
         );
-        
-        if (declaratorNode) {
-          // Get the identifier name
-          const identifierNode = declaratorNode.children.find(child =>
+
+        if (declarationNode) {
+          // Find variable declarator
+          const declaratorNode = declarationNode.children.find(child =>
+            child.type === 'variable_declarator'
+          );
+
+          if (declaratorNode) {
+            // Get the identifier name
+            const identifierNode = declaratorNode.children.find(child =>
+              child.type === 'identifier'
+            );
+
+            if (identifierNode) {
+              return identifierNode.text;
+            }
+          }
+        }
+
+        // For function declarations: export function x() {}
+        const functionNode = node.children.find(child =>
+          child.type === 'function_declaration'
+        );
+
+        if (functionNode) {
+          const identifierNode = functionNode.children.find(child =>
             child.type === 'identifier'
           );
-          
+
+          if (identifierNode) {
+            return identifierNode.text;
+          }
+        }
+
+        // For class declarations: export class X {}
+        const classNode = node.children.find(child =>
+          child.type === 'class_declaration'
+        );
+
+        if (classNode) {
+          const identifierNode = classNode.children.find(child =>
+            child.type === 'identifier'
+          );
+
           if (identifierNode) {
             return identifierNode.text;
           }
         }
       }
-      
-      // For function declarations: export function x() {}
-      const functionNode = node.children.find(child => 
-        child.type === 'function_declaration'
-      );
-      
-      if (functionNode) {
-        const identifierNode = functionNode.children.find(child =>
-          child.type === 'identifier'
-        );
-        
-        if (identifierNode) {
-          return identifierNode.text;
+
+      // Direct child identifier (for default exports)
+      const identifierNode = node.children.find(child => child.type === 'identifier');
+      if (identifierNode) return identifierNode.text;
+
+      // For more complex cases, we might need to do text analysis
+      // This is a fallback for export declarations
+      if (node.text.includes('export const ')) {
+        const match = node.text.match(/export\s+const\s+(\w+)\s*=/);
+        if (match && match[1]) {
+          return match[1];
         }
       }
-      
-      // For class declarations: export class X {}
-      const classNode = node.children.find(child => 
-        child.type === 'class_declaration'
-      );
-      
-      if (classNode) {
-        const identifierNode = classNode.children.find(child =>
-          child.type === 'identifier'
-        );
-        
-        if (identifierNode) {
-          return identifierNode.text;
+
+      if (node.text.includes('export let ')) {
+        const match = node.text.match(/export\s+let\s+(\w+)\s*=/);
+        if (match && match[1]) {
+          return match[1];
         }
       }
-    }
-    
-    // Direct child identifier (for default exports)
-    const identifierNode = node.children.find(child => child.type === 'identifier');
-    if (identifierNode) return identifierNode.text;
-    
-    // For more complex cases, we might need to do text analysis
-    // This is a fallback for export declarations
-    if (node.text.includes('export const ')) {
-      const match = node.text.match(/export\s+const\s+(\w+)\s*=/);
-      if (match && match[1]) {
-        return match[1];
+
+      if (node.text.includes('export var ')) {
+        const match = node.text.match(/export\s+var\s+(\w+)\s*=/);
+        if (match && match[1]) {
+          return match[1];
+        }
       }
-    }
-    
-    if (node.text.includes('export let ')) {
-      const match = node.text.match(/export\s+let\s+(\w+)\s*=/);
-      if (match && match[1]) {
-        return match[1];
+
+      if (node.text.includes('export function ')) {
+        const match = node.text.match(/export\s+function\s+(\w+)/);
+        if (match && match[1]) {
+          return match[1];
+        }
       }
-    }
-    
-    if (node.text.includes('export var ')) {
-      const match = node.text.match(/export\s+var\s+(\w+)\s*=/);
-      if (match && match[1]) {
-        return match[1];
+
+      if (node.text.includes('export class ')) {
+        const match = node.text.match(/export\s+class\s+(\w+)/);
+        if (match && match[1]) {
+          return match[1];
+        }
       }
+
+      return null;
+    } catch (error) {
+      console.error('Error finding identifier:', error);
+      return null;
     }
-    
-    if (node.text.includes('export function ')) {
-      const match = node.text.match(/export\s+function\s+(\w+)/);
-      if (match && match[1]) {
-        return match[1];
-      }
-    }
-    
-    if (node.text.includes('export class ')) {
-      const match = node.text.match(/export\s+class\s+(\w+)/);
-      if (match && match[1]) {
-        return match[1];
-      }
-    }
-    
-    return null;
-  } catch (error) {
-    console.error('Error finding identifier:', error);
-    return null;
   }
-}
 
 
 }
