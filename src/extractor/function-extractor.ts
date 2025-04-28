@@ -87,6 +87,7 @@ export class FunctionExtractor extends Extractor {
           MERGE (f:${DbSchema.labels.FUNCTION} {id: $functionId})
           ON CREATE SET 
             f.name = $funcName,
+            f.fullName = $funcName,
             f.lineStart = $lineStart,
             f.lineEnd = $lineEnd,
             f.columnStart = $columnStart,
@@ -96,6 +97,7 @@ export class FunctionExtractor extends Extractor {
             f.createdAt = timestamp()
           ON MATCH SET
             f.name = $funcName,
+            f.fullName = $funcName,
             f.lineStart = $lineStart,
             f.lineEnd = $lineEnd,
             f.columnStart = $columnStart,
