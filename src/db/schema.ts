@@ -31,7 +31,15 @@ export const DbSchema = {
       IMPORTS: 'IMPORTS',
       EXPORTS: 'EXPORTS',
       USES: 'USES',
-      MODIFIES: 'MODIFIES'
+      MODIFIES: 'MODIFIES',
+      USED_IN: 'USED_IN',
+      GLOBAL_IN: 'GLOBAL_IN',
+      LOCAL_TO: 'LOCAL_TO',
+      LIFETIME_OF: 'LIFETIME_OF',
+      REFERS_TO: 'REFERS_TO',
+      DEPENDS_ON: 'DEPENDS_ON',
+      INITIALIZED_WITH: 'INITIALIZED_WITH',
+      GLOBAL_TO: 'GLOBAL_TO'
     }
   };
   
