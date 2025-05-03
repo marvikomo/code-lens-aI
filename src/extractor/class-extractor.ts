@@ -119,7 +119,7 @@ export class ClassExtractor extends Extractor {
         for (const method of methods) {
           // Generate method ID
           const methodId = this.generateNodeId(
-            'method', 
+            'func', 
             method.name, 
             filePath, 
             method.position.row, 
@@ -133,6 +133,7 @@ export class ClassExtractor extends Extractor {
             MERGE (f:${DbSchema.labels.FUNCTION} {id: $methodId})
             ON CREATE SET 
               f.name = $methodName,
+              f.fullName = $methodFullName,
               f.lineStart = $lineStart,
               f.lineEnd = $lineEnd,
               f.columnStart = $columnStart,
@@ -144,6 +145,7 @@ export class ClassExtractor extends Extractor {
               f.createdAt = timestamp()
             ON MATCH SET
               f.name = $methodName,
+               f.fullName = $methodFullName,
               f.lineStart = $lineStart,
               f.lineEnd = $lineEnd,
               f.columnStart = $columnStart,
@@ -162,7 +164,8 @@ export class ClassExtractor extends Extractor {
             columnEnd: method.endPosition.column,
             isConstructor: method.name === 'constructor',
             parameters: method.parameters || [],
-            sourceCode: method.source
+            sourceCode: method.source,
+            methodFullName: `${className}.${method.name}`
           });
           
           // Create relationship between class and method
