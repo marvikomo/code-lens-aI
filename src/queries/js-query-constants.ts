@@ -75,7 +75,6 @@ export const FunctionQuery = `
 
 `;
 
-
 export const VariableQuery = `
 ;; Constant declarations
 (lexical_declaration
@@ -89,25 +88,159 @@ export const VariableQuery = `
   (variable_declarator
     name: (identifier) @name)) @let_declaration
 
-;; Var declarations
+;; Variable declarations (var)
 (variable_declaration
-  "var" @var_keyword
   (variable_declarator
     name: (identifier) @name)) @var_declaration
 
-;; Variable with initial value
+;; Variable with initial value 
 (variable_declarator
   name: (identifier) @name
   value: (_) @value) @var_with_value
 
-;; Exported variables
+;; Destructuring assignment from object
+(variable_declarator
+  name: (object_pattern
+    (shorthand_property_identifier_pattern) @name)) @destructuring
+
+;; Destructuring assignment from array
+(variable_declarator
+  name: (array_pattern
+    (identifier) @name)) @destructuring
+
+;; Method parameters
+(method_definition
+  name: (property_identifier) @method_name
+  parameters: (formal_parameters
+    (identifier) @name)) @var_declaration
+
+;; Function parameters
+(function_declaration
+  name: (identifier) @function_name
+  parameters: (formal_parameters
+    (identifier) @name)) @var_declaration
+
+;; Arrow function parameters
+(arrow_function
+  parameters: (formal_parameters
+    (identifier) @name)) @var_declaration
+
+;; Object property declarations
+(pair
+  key: (property_identifier) @name
+  value: (_)? @value) @var_declaration
+
+;; Variable initialized with a function
+(variable_declarator
+  name: (identifier) @name
+  value: (function_expression)) @var_with_function
+
+;; Variable initialized with arrow function
+(variable_declarator
+  name: (identifier) @name
+  value: (arrow_function)) @var_with_function
+
+;; Variable initialized with a class
+(variable_declarator
+  name: (identifier) @name
+  value: (class)) @var_with_class
+
+;; Variable initialized with object literal
+(variable_declarator
+  name: (identifier) @name
+  value: (object)) @var_with_object
+
+;; Exported variable declarations
+(export_statement
+  declaration: (variable_declaration
+    (variable_declarator
+      name: (identifier) @name
+      value: (_)? @value))) @exported_var
+
+;; Exported let/const declarations
+(export_statement
+  declaration: (lexical_declaration
+    (variable_declarator
+      name: (identifier) @name
+      value: (_)? @value))) @exported_var
+
+;; Exported variables without values
 (export_statement
   (lexical_declaration
     (variable_declarator
       name: (identifier) @name))) @exported_var
 
-;; Variable references/usage
+;; Export default variable
+(export_statement 
+  (identifier) @name) @exported_var
+
+;; Import declarations
+(import_specifier
+  name: (identifier) @name) @import_var
+
+;; Default import
+(import_clause
+  (identifier) @name) @default_import
+
+;; Variable assignment relationships
+(assignment_expression
+  left: (identifier) @assigned_var
+  right: (identifier) @source_var) @assignment
+
+;; Variable assigned to a value
+(assignment_expression
+  left: (identifier) @assigned_var
+  right: (_) @assigned_value) @assignment
+
+;; Member expression (object property access)
+(member_expression
+  object: (identifier) @object
+  property: (property_identifier) @property) @property_access
+
+;; Variable used as function argument
+(call_expression
+  function: (identifier) @function_name
+  arguments: (arguments
+    (identifier) @argument)) @function_call
+
+;; Variable references - captures for USED_IN relationship
 (identifier) @var_reference
+;; Rest parameters
+(formal_parameters
+  (rest_pattern
+    (identifier) @name)) @rest_param
+;; Class instance properties
+(assignment_expression
+  left: (member_expression
+    object: (this) @this_object
+    property: (property_identifier) @name)) @instance_property
+
+;; Default parameters
+(formal_parameters
+  (assignment_pattern
+    left: (identifier) @name
+    right: (_) @default_value)) @default_param
+
+;; Catch clause parameter
+(catch_clause
+  parameter: (identifier) @name) @catch_param
+;; Destructuring with property identifier
+(variable_declarator
+  name: (object_pattern
+    (pair_pattern
+      key: (property_identifier)
+      value: (identifier) @name))) @destructuring
+
+;; Nested object destructuring
+(shorthand_property_identifier_pattern) @name @nested_destructuring
+;; For-of loop variables
+(for_in_statement
+  left: (identifier) @name) @for_of_var
+
+;; For-in loop variables
+(for_in_statement 
+  left: (identifier) @name) @for_in_var
+
 `;
 
 export const ClassQuery = `
