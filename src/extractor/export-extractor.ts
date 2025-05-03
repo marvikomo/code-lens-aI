@@ -69,7 +69,7 @@ export class ExportExtractor extends Extractor {
         text: exportNode.text
       };
 
-      logger.writeResults(baseExportData, "baseExportData");
+     // logger.writeResults(baseExportData, "baseExportData");
 
       // Results array with proper typing
       const results: Array<{
@@ -167,7 +167,7 @@ export class ExportExtractor extends Extractor {
 
     //console.log("exports", exports)
 
-    logger.writeResults(exports, 'export');
+    //logger.writeResults(exports, 'export');
     // Batch upload exports to Neo4j
     await this.batchUploadExports(exports);
 

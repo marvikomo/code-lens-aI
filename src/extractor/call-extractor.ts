@@ -35,14 +35,14 @@ export class CallExtractor extends Extractor {
       filePath: string, 
       query: Parser.Query
     ): Promise<void> {
-      console.log(`Extracting calls from ${filePath}`);
+      //console.log(`Extracting calls from ${filePath}`);
       
       // Ensure module node exists
       await this.ensureModuleNode(filePath);
       
       // Get all call expressions
       const matches = query.matches(tree.rootNode);
-      console.log(`Found ${matches.length} call matches in ${filePath}`);
+      //console.log(`Found ${matches.length} call matches in ${filePath}`);
       
       // First pass: collect all call info without DB operations
       const callInfos: CallInfo[] = [];
@@ -66,14 +66,14 @@ export class CallExtractor extends Extractor {
           callInfos.push(callInfo);
         }
       }
-      console.log(`Extracted ${callInfos.length} call infos from ${filePath}`);
+      //console.log(`Extracted ${callInfos.length} call infos from ${filePath}`);
       
       // Process in batches
       const batchSize = 10; // Smaller batch size for better performance
       for (let i = 0; i < callInfos.length; i += batchSize) {
         const batch = callInfos.slice(i, i + batchSize);
         await this.processCallInfoBatch(batch);
-        console.log(`Processed batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(callInfos.length/batchSize)}`);
+        //console.log(`Processed batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(callInfos.length/batchSize)}`);
       }
       
       console.log(`Completed extracting ${callInfos.length} calls from ${filePath}`);
@@ -210,13 +210,13 @@ export class CallExtractor extends Extractor {
         `, { calleeNames });
 
        
-        console.log('Callee names:', calleeNames);
+       //console.log('Callee names:', calleeNames);
         // Create a map of callee name to id
         const calleeMap = new Map<string, string>();
         for (const record of calleeResult.records) {
           calleeMap.set(record.get('name'), record.get('id'));
         }
-        console.log('Callee result:', calleeMap);
+       // console.log('Callee result:', calleeMap);
         // 4. Connect calls to existing callees
         const existingCalleeRelations = calls
           .filter(call => calleeMap.has(call.calleeName))

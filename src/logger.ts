@@ -36,17 +36,18 @@ export class Logger {
     
         const convertedData = this.deepConvertToObject(data)
     
-        fs.appendFileSync(outputFile, JSON.stringify(convertedData, null, 2) + ',\n', 'utf8');
+        fs.writeFileSync(outputFile, JSON.stringify(convertedData, null, 2), 'utf8')
         console.log(`Results written to ${outputFile}`)
       }
 
-      public writeResultsOnce(data: any, key?: string): void {
+      public writeApendResults(data: any, key?: string): void {
+           
         const timestamp = key ?? Date.now().toString()
         const outputFile = path.join(this.outputDir, `analysis_${timestamp}.json`)
     
         const convertedData = this.deepConvertToObject(data)
     
-        fs.writeFileSync(outputFile, JSON.stringify(convertedData, null, 2), 'utf8')
+        fs.appendFileSync(outputFile, JSON.stringify(convertedData, null, 2) + ',\n', 'utf8');
         console.log(`Results written to ${outputFile}`)
       }
 }
