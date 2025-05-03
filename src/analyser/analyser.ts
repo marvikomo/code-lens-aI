@@ -27,6 +27,7 @@ import { ClassExtractor } from '../extractor/class-extractor';
 import { ImportExtractor } from '../extractor/import-extractor';
 import { ExportExtractor } from '../extractor/export-extractor';
 import { CallExtractor } from '../extractor/call-extractor';
+import { VariableExtractor } from '../extractor/variable-extractor';
 
 
 
@@ -42,6 +43,7 @@ export class CodeAnalyzer {
     private importExtractor: Extractor;
     private exportExtractor: Extractor;
     private callExtractor: Extractor;
+    private variableExtractor: Extractor;
 
     private parser: TreeSitterParser;
 
@@ -73,6 +75,7 @@ export class CodeAnalyzer {
         this.exportExtractor = new ExportExtractor(dbClient);
         this.classExtractor = new ClassExtractor(dbClient);
         this.callExtractor = new CallExtractor(dbClient);
+        this.variableExtractor = new VariableExtractor(dbClient);
         
         this.parser = new TreeSitterParser(this.registry);
         this.nodes = new Map<string, CodeNode>();
@@ -167,6 +170,7 @@ export class CodeAnalyzer {
                    const importQuery = this.registry.get(language).queries.imports;
                    const exportQuery = this.registry.get(language).queries.exports;
                    const callQuery = this.registry.get(language).queries.calls;
+                   const variableQuery = this.registry.get(language).queries.variables;
                    
 
                     await this.functionExtractor.extract(tree, content, filePath, functionQuery);
@@ -176,7 +180,11 @@ export class CodeAnalyzer {
                      //await this.importExtractor.extract(tree, content, filePath, importQuery);
                      await this.exportExtractor.extract(tree, content, filePath, exportQuery);
 
+                     await this.variableExtractor.extract(tree, content, filePath, variableQuery);
+
                      await this.callExtractor.extract(tree, content, filePath, callQuery);
+
+                     console.log("done")
 
                     // Extract function declarations
                     // this.extractFunctions(parsedFile);
