@@ -162,3 +162,18 @@ export function determineNodeContext(node: Parser.SyntaxNode): { context: string
     return node.parent || null;
   }
 
+  export function findParentOfType(node: Parser.SyntaxNode, targetType: string, maxDepth: number = 5): string | null {
+    let parent = node;
+    let depth = 0;
+  
+    // Traverse upwards through the AST to find the parent node with the given type
+    while (parent && depth < maxDepth) {
+      if (parent.type === targetType) {
+        return parent.text || null;  // Return the text or relevant data from the matched parent node
+      }
+      parent = parent.parent;
+      depth++;
+    }
+  
+    return null;  // Return null if no parent of the target type is found
+  }
