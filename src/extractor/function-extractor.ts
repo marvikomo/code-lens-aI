@@ -232,6 +232,43 @@ export class FunctionExtractor extends Extractor {
     console.log(`Indexed ${functionsData.length} functions in batch.`);
   }
 
+   /**
+   * Get an indexed function by its unique ID from Neo4j
+   */
+   public async getFunctionById(functionId: string): Promise<any> {
+    try {
+      // Query to get the function from Neo4j by its unique ID
+      const result = await this.dbClient.query(`
+        MATCH (f:${DbSchema.labels.FUNCTION} {id: $functionId})
+        RETURN f.id AS functionId, 
+               f.name AS funcName, 
+               f.fullName AS funcFullName, 
+               f.lineStart AS lineStart, 
+               f.lineEnd AS lineEnd, 
+               f.columnStart AS columnStart, 
+               f.columnEnd AS columnEnd, 
+               f.parameters AS parameters, 
+               f.sourceCode AS sourceCode, 
+               f.createdAt AS createdAt, 
+               f.updatedAt AS updatedAt
+      `, { functionId });
+  
+      // Check if a function was found
+      if (result.length === 0) {
+        console.log(`Function with ID ${functionId} not found.`);
+        return null; // Or you can throw an error if needed
+      }
+  
+      // Return the function details from the query result
+      return result[0];
+  
+    } catch (error) {
+      console.error('Error retrieving function from Neo4j:', error);
+      throw error; // Re-throw the error or return a custom error response
+    }
+   
+  }
+
 
     /**
    * Extract parameter information from a function node
