@@ -227,56 +227,58 @@ export class FunctionNodeService {
   }
 
   public async searchFunctions(searchParams: {
-    name?: string
-    filePath?: string
-    startLine?: number
-    endLine?: number
-    limit?: number
+    name?: string;
+    filePath?: string;
+    startLine?: number;
+    endLine?: number;
+    limit?: number;
   }): Promise<any[]> {
     try {
-      const { name, filePath, startLine, endLine, limit = 10 } = searchParams
-
-      // Build the query based on available parameters
-      let query = `MATCH (f:${DbSchema.labels.FUNCTION})`
-      const queryParams: Record<string, any> = {}
-
-      // For file path, we need to match with the module
+      const { 
+        name, 
+        filePath 
+      } = searchParams;
+      
+      // Convert numeric parameters to integers explicitly
+      const startLine = searchParams.startLine !== undefined ? parseInt(String(searchParams.startLine), 10) : undefined;
+      const endLine = searchParams.endLine !== undefined ? parseInt(String(searchParams.endLine), 10) : undefined;
+      const limit = searchParams.limit !== undefined ? parseInt(String(searchParams.limit), 10) : 10;
+      
+      // Build the query with file path matching if provided
+      let query = filePath 
+        ? `MATCH (f:${DbSchema.labels.FUNCTION})-[:${DbSchema.relationships.DEFINED_IN}]->(m:${DbSchema.labels.MODULE} {id: $moduleId})`
+        : `MATCH (f:${DbSchema.labels.FUNCTION})`;
+      
+      const queryParams: Record<string, any> = {};
       if (filePath) {
-        query = `MATCH (f:${DbSchema.labels.FUNCTION})-[:${DbSchema.relationships.DEFINED_IN}]->(m:${DbSchema.labels.MODULE})`
-        query += ` WHERE m.id = $moduleId`
-        queryParams.moduleId = `mod:${filePath}`
+        queryParams.moduleId = `mod:${filePath}`;
       }
-
-      // Add WHERE clauses for filtering
-      const whereClauses: string[] = []
+      
+      // Build individual criteria for WHERE clause
+      const criteria: string[] = [];
+      
       if (name) {
-        whereClauses.push(
-          `(f.name CONTAINS $name OR f.fullName CONTAINS $name)`,
-        )
-        queryParams.name = name
+        criteria.push(`(f.name CONTAINS $name OR f.fullName CONTAINS $name)`);
+        queryParams.name = name;
       }
-
-      // Add line range filtering
+      
       if (startLine !== undefined) {
-        whereClauses.push(`f.lineStart >= $startLine`)
-        queryParams.startLine = startLine
+        criteria.push(`(f.lineStart <= $startLine AND f.lineEnd >= $startLine)`);
+        queryParams.startLine = startLine;
       }
-
+      
       if (endLine !== undefined) {
-        whereClauses.push(`f.lineEnd <= $endLine`)
-        queryParams.endLine = endLine
+        criteria.push(`(f.lineStart <= $endLine AND f.lineEnd >= $endLine)`);
+        queryParams.endLine = endLine;
       }
-
-      // Add the WHERE clause if we have additional conditions beyond the file path
-      if (whereClauses.length > 0) {
-        if (filePath) {
-          query += ` AND ${whereClauses.join(' AND ')}`
-        } else {
-          query += ` WHERE ${whereClauses.join(' AND ')}`
-        }
+      
+      // Add WHERE clause if we have any criteria
+      if (criteria.length > 0) {
+        // Use OR between criteria - match if ANY criterion matches
+        query += ` WHERE ${criteria.join(' OR ')}`;
       }
-
-      // Complete the query with return statement and pagination
+      
+      // Add return clause
       query += `
         RETURN f.id AS functionId, 
                f.name AS funcName, 
@@ -286,52 +288,23 @@ export class FunctionNodeService {
                f.columnStart AS columnStart, 
                f.columnEnd AS columnEnd, 
                f.parameters AS parameters, 
-               f.sourceCode AS sourceCode, 
-               f.createdAt AS createdAt, 
-               f.updatedAt AS updatedAt
+               f.sourceCode AS sourceCode
         ${filePath ? ', m.path AS filePath' : ''}
         ORDER BY f.lineStart ASC
-        LIMIT $limit
-      `
-      queryParams.limit = limit
-
+      `;
+      
+      // Add LIMIT clause directly in the query
+      query += ` LIMIT 1`;
+      
       // Execute the query
-      const results = await this.dbClient.query(query, queryParams)
-
-      // If no file path was provided in the search, we need to add it to the results
-      if (!filePath) {
-        // Fetch the module paths for each function
-        const functionIds = results.map((func) => func.functionId)
-        if (functionIds.length > 0) {
-          const pathQuery = `
-            MATCH (f:${DbSchema.labels.FUNCTION})-[:${DbSchema.relationships.DEFINED_IN}]->(m:${DbSchema.labels.MODULE})
-            WHERE f.id IN $functionIds
-            RETURN f.id AS functionId, m.path AS filePath
-          `
-          const pathResults = await this.dbClient.query(pathQuery, {
-            functionIds,
-          })
-
-          // Create a map of functionId to filePath
-          const pathMap = new Map<string, string>()
-          for (const path of pathResults) {
-            pathMap.set(path.functionId, path.filePath)
-          }
-
-          // Add filePath to each result
-          for (const result of results) {
-            result.filePath = pathMap.get(result.functionId) || ''
-          }
-        }
-      }
-
-      return results
+      const results = await this.dbClient.query(query, queryParams);
+      
+      return results;
     } catch (error) {
-      console.error('Error searching functions from Neo4j:', error)
-      throw error
+      console.error('Error searching functions from Neo4j:', error);
+      throw error;
     }
   }
-
   /**
    * Extract parameter information from a function node
    */
