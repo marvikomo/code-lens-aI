@@ -3,11 +3,12 @@ import { Extractor } from "./extractor";
 import { DbSchema } from '../db/schema';
 import { Neo4jClient } from "../db/neo4j-client";
 import { logger } from '../logger';
+import { TreeSitterUtil } from '../util/tree-sitter-util';
 
 export class ExportExtractor extends Extractor {
 
-  constructor(dbClient: Neo4jClient) {
-    super(dbClient);
+  constructor(dbClient: Neo4jClient, treeSitterUtil: TreeSitterUtil) {
+    super(dbClient, treeSitterUtil);
   }
 
   /**
