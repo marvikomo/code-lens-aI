@@ -46,7 +46,9 @@ export class FunctionExtractor extends Extractor {
     content: string, 
     filePath: string
   ): Promise<void> {
-    await this.dbClient.runInTransaction(async (session) => {
+    
+      const functionIndexes = [];
+
       for (const match of matches) {
         // Get function node and name capture
         const functionCapture = match.captures.find(c => c.name === 'function');
@@ -58,74 +60,178 @@ export class FunctionExtractor extends Extractor {
         
         // Get function details
         const funcName = nameCapture ? nameCapture.node.text : '<anonymous>';
-        const startPosition = funcNode.startPosition;
-        const endPosition = funcNode.endPosition;
-        const funcText = content.substring(
-          content.indexOf('\n', 0) === 0 ? 0 : content.indexOf('\n', 0) + 1, 
-          funcNode.endIndex
-        );
-        
-        // Function source code (trimmed if too long)
-        const sourceCode = funcNode.text.length > 1000 
-          ? funcNode.text.substring(0, 1000) + '...' 
-          : funcNode.text;
-        
-        // Generate unique ID
-        const functionId = this.generateNodeId(
-          'func', 
-          funcName, 
-          filePath, 
-          startPosition.row, 
-          startPosition.column
-        );
-        
-        // Extract parameters
-        const parameters = this.extractParameters(funcNode);
-        
-        // Create function node
-        await session.run(`
-          MERGE (f:${DbSchema.labels.FUNCTION} {id: $functionId})
-          ON CREATE SET 
-            f.name = $funcName,
-            f.fullName = $funcName,
-            f.lineStart = $lineStart,
-            f.lineEnd = $lineEnd,
-            f.columnStart = $columnStart,
-            f.columnEnd = $columnEnd,
-            f.parameters = $parameters,
-            f.sourceCode = $sourceCode,
-            f.createdAt = timestamp()
-          ON MATCH SET
-            f.name = $funcName,
-            f.fullName = $funcName,
-            f.lineStart = $lineStart,
-            f.lineEnd = $lineEnd,
-            f.columnStart = $columnStart,
-            f.columnEnd = $columnEnd,
-            f.parameters = $parameters,
-            f.sourceCode = $sourceCode,
-            f.updatedAt = timestamp()
-        `, {
-          functionId,
+
+        functionIndexes.push({
+          functionNode: funcNode,
           funcName,
-          lineStart: startPosition.row,
-          lineEnd: endPosition.row,
-          columnStart: startPosition.column,
-          columnEnd: endPosition.column,
-          parameters,
-          sourceCode
+          filePath,
         });
-        
-        // Create relationship to module
-        const moduleId = `mod:${filePath}`;
-        await session.run(`
-          MATCH (f:${DbSchema.labels.FUNCTION} {id: $functionId})
-          MATCH (m:${DbSchema.labels.MODULE} {id: $moduleId})
-          MERGE (f)-[:${DbSchema.relationships.DEFINED_IN}]->(m)
-        `, { functionId, moduleId });
+
+
       }
-    });
+
+      await this.indexFunctionsInBatch(functionIndexes);
+        
   }
+
+
+  // Public function to index a function by passing the function node
+  public async indexFunction(
+    functionNode: Parser.SyntaxNode,
+    funcName: string,
+    filePath: string
+  ): Promise<string> {
+  
+    const startPosition = functionNode.startPosition;
+    const endPosition = functionNode.endPosition;
+
+    // Function source code (trimmed if too long)
+    const sourceCode = functionNode.text.length > 1000 
+      ? functionNode.text.substring(0, 1000) + '...' 
+      : functionNode.text;
+
+    // Generate unique ID
+    const functionId = this.generateNodeId(
+      'func', 
+      funcName, 
+      filePath, 
+      startPosition.row, 
+      startPosition.column
+    );
+
+    // Extract parameters
+    const parameters = this.extractParameters(functionNode);
+
+    // Index the function in Neo4j
+    await this.dbClient.runInTransaction(async (session) => {
+      // Create or update function node
+      await session.run(`
+        MERGE (f:${DbSchema.labels.FUNCTION} {id: $functionId})
+        ON CREATE SET 
+          f.name = $funcName,
+          f.fullName = $funcName,
+          f.lineStart = $lineStart,
+          f.lineEnd = $lineEnd,
+          f.columnStart = $columnStart,
+          f.columnEnd = $columnEnd,
+          f.parameters = $parameters,
+          f.sourceCode = $sourceCode,
+          f.createdAt = timestamp()
+        ON MATCH SET
+          f.name = $funcName,
+          f.fullName = $funcName,
+          f.lineStart = $lineStart,
+          f.lineEnd = $lineEnd,
+          f.columnStart = $columnStart,
+          f.columnEnd = $columnEnd,
+          f.parameters = $parameters,
+          f.sourceCode = $sourceCode,
+          f.updatedAt = timestamp()
+      `, {
+        functionId,
+        funcName,
+        lineStart: startPosition.row,
+        lineEnd: endPosition.row,
+        columnStart: startPosition.column,
+        columnEnd: endPosition.column,
+        parameters,
+        sourceCode
+      });
+
+      // Create relationship to module
+      const moduleId = `mod:${filePath}`;
+      await session.run(`
+        MATCH (f:${DbSchema.labels.FUNCTION} {id: $functionId})
+        MATCH (m:${DbSchema.labels.MODULE} {id: $moduleId})
+        MERGE (f)-[:${DbSchema.relationships.DEFINED_IN}]->(m)
+      `, { functionId, moduleId });
+    });
+
+    console.log(`Function indexed: ${funcName} in ${filePath}`);
+
+    return functionId;
+  }
+
+  public async indexFunctionsInBatch(
+    functionsData: { functionNode: Parser.SyntaxNode, funcName: string, filePath: string }[]
+  ): Promise<void> {
+    // Collect all the functions' indexing data into an array of parameters
+    const functionsParams = functionsData.map(({ functionNode, funcName, filePath }) => {
+      const startPosition = functionNode.startPosition;
+      const endPosition = functionNode.endPosition;
+  
+      // Function source code (trimmed if too long)
+      const sourceCode = functionNode.text.length > 1000 
+        ? functionNode.text.substring(0, 1000) + '...' 
+        : functionNode.text;
+  
+      // Generate unique ID
+      const functionId = this.generateNodeId(
+        'func', 
+        funcName, 
+        filePath, 
+        startPosition.row, 
+        startPosition.column
+      );
+  
+      // Extract parameters
+      const parameters = this.extractParameters(functionNode);
+  
+      return {
+        functionId,
+        funcName,
+        lineStart: startPosition.row,
+        lineEnd: endPosition.row,
+        columnStart: startPosition.column,
+        columnEnd: endPosition.column,
+        parameters,
+        sourceCode,
+        filePath,
+      };
+    });
+  
+    // Execute all the indexing in a single transaction using UNWIND
+    await this.dbClient.runInTransaction(async (session) => {
+      // Create or update function nodes and relationships in bulk
+      await session.run(`
+        UNWIND $functions AS function
+        MERGE (f:${DbSchema.labels.FUNCTION} {id: function.functionId})
+        ON CREATE SET 
+          f.name = function.funcName,
+          f.fullName = function.funcName,
+          f.lineStart = function.lineStart,
+          f.lineEnd = function.lineEnd,
+          f.columnStart = function.columnStart,
+          f.columnEnd = function.columnEnd,
+          f.parameters = function.parameters,
+          f.sourceCode = function.sourceCode,
+          f.createdAt = timestamp()
+        ON MATCH SET
+          f.name = function.funcName,
+          f.fullName = function.funcName,
+          f.lineStart = function.lineStart,
+          f.lineEnd = function.lineEnd,
+          f.columnStart = function.columnStart,
+          f.columnEnd = function.columnEnd,
+          f.parameters = function.parameters,
+          f.sourceCode = function.sourceCode,
+          f.updatedAt = timestamp()
+      `, { functions: functionsParams });
+  
+      // Create relationships for each function to its module in bulk
+      const moduleIds = functionsParams.map(f => `mod:${f.filePath}`);
+      await session.run(`
+        UNWIND $functions AS function
+        MATCH (f:${DbSchema.labels.FUNCTION} {id: function.functionId})
+        MATCH (m:${DbSchema.labels.MODULE}) 
+        WHERE m.id IN $moduleIds
+        MERGE (f)-[:${DbSchema.relationships.DEFINED_IN}]->(m)
+      `, { functions: functionsParams, moduleIds });
+    });
+  
+    console.log(`Indexed ${functionsData.length} functions in batch.`);
+  }
+
 
     /**
    * Extract parameter information from a function node
