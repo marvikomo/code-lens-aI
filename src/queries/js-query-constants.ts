@@ -76,27 +76,34 @@ export const FunctionQuery = `
 `;
 
 export const VariableQuery = `
+;; Variable with initial value 
+(variable_declarator
+  name: (identifier) @name
+  value: (_) @value
+  ) @var_with_value
+  
 ;; Constant declarations
 (lexical_declaration
   "const" @const_keyword
   (variable_declarator
-    name: (identifier) @name)) @const_declaration
+    name: (identifier) @name
+     !value
+    )) @const_declaration
 
 ;; Let declarations
 (lexical_declaration
   "let" @let_keyword
   (variable_declarator
-    name: (identifier) @name)) @let_declaration
+    name: (identifier) @name
+    !value
+    )) @let_declaration
 
 ;; Variable declarations (var)
 (variable_declaration
   (variable_declarator
-    name: (identifier) @name)) @var_declaration
-
-;; Variable with initial value 
-(variable_declarator
-  name: (identifier) @name
-  value: (_) @value) @var_with_value
+    name: (identifier) @name
+     !value
+    )) @var_declaration
 
 ;; Destructuring assignment from object
 (variable_declarator
@@ -150,29 +157,22 @@ export const VariableQuery = `
   name: (identifier) @name
   value: (object)) @var_with_object
 
-;; Exported variable declarations
-(export_statement
-  declaration: (variable_declaration
-    (variable_declarator
-      name: (identifier) @name
-      value: (_)? @value))) @exported_var
 
-;; Exported let/const declarations
-(export_statement
-  declaration: (lexical_declaration
-    (variable_declarator
-      name: (identifier) @name
-      value: (_)? @value))) @exported_var
 
 ;; Exported variables without values
 (export_statement
   (lexical_declaration
     (variable_declarator
-      name: (identifier) @name))) @exported_var
+      name: (identifier) @name
+        !value
+        )
+      )) @exported_var
 
 ;; Export default variable
 (export_statement 
-  (identifier) @name) @exported_var
+  (identifier) @name
+  !value
+  ) @exported_var
 
 ;; Import declarations
 (import_specifier
