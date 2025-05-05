@@ -28,6 +28,7 @@ import { ImportExtractor } from '../extractor/import-extractor';
 import { ExportExtractor } from '../extractor/export-extractor';
 import { CallExtractor } from '../extractor/call-extractor';
 import { VariableExtractor } from '../extractor/variable-extractor';
+import { TreeSitterUtil } from '../util/tree-sitter-util';
 
 
 
@@ -49,11 +50,14 @@ export class CodeAnalyzer {
 
     private jsParser = new Parser();
     private registry: LanguageRegistry;
+    private treeSitterUtil: TreeSitterUtil;
 
     constructor( dbClient: Neo4jClient,
          languageRegistry: LanguageRegistry) {
 
         this.jsParser.setLanguage(JavaScript as TreeSitterLanguage);
+
+        this.treeSitterUtil = new TreeSitterUtil();
 
         this.registry = languageRegistry;
         this.registry.register('javascript', {
@@ -69,13 +73,13 @@ export class CodeAnalyzer {
             }
         });
 
-        this.functionExtractor = new FunctionExtractor(dbClient);
-        this.classExtractor = new ClassExtractor(dbClient);
-        this.importExtractor = new ImportExtractor(dbClient);
-        this.exportExtractor = new ExportExtractor(dbClient);
-        this.classExtractor = new ClassExtractor(dbClient);
-        this.callExtractor = new CallExtractor(dbClient);
-        this.variableExtractor = new VariableExtractor(dbClient);
+        this.functionExtractor = new FunctionExtractor(dbClient, this.treeSitterUtil);
+        this.classExtractor = new ClassExtractor(dbClient, this.treeSitterUtil);
+        this.importExtractor = new ImportExtractor(dbClient, this.treeSitterUtil);
+        this.exportExtractor = new ExportExtractor(dbClient, this.treeSitterUtil);
+        this.classExtractor = new ClassExtractor(dbClient, this.treeSitterUtil);
+        this.callExtractor = new CallExtractor(dbClient, this.treeSitterUtil);
+        this.variableExtractor = new VariableExtractor(dbClient, this.treeSitterUtil);
         
         this.parser = new TreeSitterParser(this.registry);
         this.nodes = new Map<string, CodeNode>();
