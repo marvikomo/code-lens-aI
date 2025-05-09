@@ -2,7 +2,6 @@ import { NodeType } from '../enum/NodeType'
 import Parser from 'tree-sitter'
 
 export class TreeSitterUtil {
-
   public determineNodeContext(
     node: Parser.SyntaxNode,
   ): {
@@ -265,47 +264,147 @@ export class TreeSitterUtil {
     return 'module'
   }
 
-   /**
- * Find all references to an identifier in the tree
- */
-public findReferences(
-    tree: Parser.Tree, 
+  /**
+   * Find all references to an identifier in the tree
+   */
+  public findReferences(
+    tree: Parser.Tree,
     targetName: string,
-    declarationNode?: Parser.SyntaxNode
-  ): { node: Parser.SyntaxNode, isDeclaration: boolean, usage: string }[] {
-    const references: { node: Parser.SyntaxNode, isDeclaration: boolean, usage: string }[] = [];
-    
+    declarationNode?: Parser.SyntaxNode,
+  ): { node: Parser.SyntaxNode; isDeclaration: boolean; usage: string }[] {
+    const references: {
+      node: Parser.SyntaxNode
+      isDeclaration: boolean
+      usage: string
+    }[] = []
+
     // Helper function to recursively search the tree
     const searchNode = (node: Parser.SyntaxNode) => {
       // Check if this node is an identifier with the target name
       if (node.type === 'identifier' && node.text === targetName) {
         // Determine if this is a declaration or reference
-        const isDeclaration = this.isDeclarationNode(node);
+        const isDeclaration = this.isDeclarationNode(node)
         // Determine how it's being used
-        const usage = this.determineNodeUsage(node);
-        
+        const usage = this.determineNodeUsage(node)
+
         references.push({
           node,
           isDeclaration,
-          usage
-        });
+          usage,
+        })
+      }
+
+      // Recursively search all children
+      for (let i = 0; i < node.childCount; i++) {
+        const child = node.child(i)
+        if (child) {
+          searchNode(child)
+        }
+      }
+    }
+
+    // Start the search from the root node
+    searchNode(tree.rootNode)
+
+    return references
+  }
+
+
+  public findDeclarationNode(
+    tree: Parser.Tree,
+    targetName: string,
+  ): {
+    node: Parser.SyntaxNode
+    type: 'function' | 'class' | 'variable' | 'import' | 'export' | 'method' | 'parameter'
+    parentNode: Parser.SyntaxNode | null
+  } | null {
+    // Helper function to recursively search the tree
+    const searchNode = (node: Parser.SyntaxNode): {
+      node: Parser.SyntaxNode
+      type: 'function' | 'class' | 'variable' | 'import' | 'export' | 'method' | 'parameter'
+      parentNode: Parser.SyntaxNode | null
+    } | null => {
+      // Check if this node is an identifier with the target name
+      if (node.type === 'identifier' && node.text === targetName) {
+        const parent = node.parent;
+        
+        // Check various declaration patterns
+        if (parent) {
+          let declarationType: 'function' | 'class' | 'variable' | 'import' | 'export' | 'method' | 'parameter' | null = null;
+          
+          // Function declaration
+          if (parent.type === 'function_declaration' && 
+              node === parent.childForFieldName('name')) {
+            declarationType = 'function';
+          }
+          // Variable declaration
+          else if (parent.type === 'variable_declarator' && 
+                  node === parent.childForFieldName('name')) {
+            declarationType = 'variable';
+          }
+          // Class declaration
+          else if (parent.type === 'class_declaration' && 
+                  node === parent.childForFieldName('name')) {
+            declarationType = 'class';
+          }
+          // Method declaration
+          else if (parent.type === 'method_definition' && 
+                  node === parent.childForFieldName('name')) {
+            declarationType = 'method';
+          }
+          // Import declaration - named import
+          else if (parent.type === 'import_specifier' && 
+                  (node === parent.childForFieldName('name') || 
+                   node === parent.childForFieldName('alias'))) {
+            declarationType = 'import';
+          }
+          // Import declaration - namespace import
+          else if (parent.type === 'namespace_import') {
+            declarationType = 'import';
+          }
+          // Import declaration - default import
+          else if (parent.type === 'import_clause' && 
+                  node === parent.firstChild) {
+            declarationType = 'import';
+          }
+          // Export declaration
+          else if (parent.type === 'export_specifier' && 
+                  node === parent.childForFieldName('name')) {
+            declarationType = 'export';
+          }
+          // Parameter declaration
+          else if (parent.type === 'formal_parameters') {
+            declarationType = 'parameter';
+          }
+          
+          // If we identified this as a declaration, return it immediately
+          if (declarationType) {
+            return {
+              node,
+              type: declarationType,
+              parentNode: parent
+            };
+          }
+        }
       }
       
       // Recursively search all children
       for (let i = 0; i < node.childCount; i++) {
         const child = node.child(i);
         if (child) {
-          searchNode(child);
+          const result = searchNode(child);
+          if (result) {
+            return result; // Return the first declaration found
+          }
         }
       }
+      
+      return null; // No declaration found in this branch
     };
     
     // Start the search from the root node
-    searchNode(tree.rootNode);
-    
-    return references;
+    return searchNode(tree.rootNode);
   }
-
   /**
    * Determine if a node is a declaration
    */
