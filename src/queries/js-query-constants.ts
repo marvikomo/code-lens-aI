@@ -108,12 +108,15 @@ export const VariableQuery = `
 ;; Destructuring assignment from object
 (variable_declarator
   name: (object_pattern
-    (shorthand_property_identifier_pattern) @name)) @destructuring
+    (shorthand_property_identifier_pattern) @name)
+     value: (_) @value) @destructuring
 
 ;; Destructuring assignment from array
 (variable_declarator
   name: (array_pattern
-    (identifier) @name)) @destructuring
+    (identifier) @name)
+     value: (_) @value
+    ) @destructuring
 
 ;; Method parameters
 (method_definition
@@ -121,16 +124,6 @@ export const VariableQuery = `
   parameters: (formal_parameters
     (identifier) @name)) @var_declaration
 
-;; Function parameters
-(function_declaration
-  name: (identifier) @function_name
-  parameters: (formal_parameters
-    (identifier) @name)) @var_declaration
-
-;; Arrow function parameters
-(arrow_function
-  parameters: (formal_parameters
-    (identifier) @name)) @var_declaration
 
 ;; Object property declarations
 (pair
