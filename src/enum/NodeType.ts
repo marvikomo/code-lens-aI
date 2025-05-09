@@ -45,5 +45,7 @@ export enum NodeType {
     ArrowFunction = 'arrow_function',               // Arrow function expression (e.g., () => {})
     ClassExpression = 'class_expression',           // Class expressions (class MyClass {})
     FunctionExpression = 'function_expression',     // Function expressions (function() {})
-    Unknown = 'unknown',                            // Placeholder for unknown node types
+    Unknown = 'unknown',  
+    NewExpression = 'new_expression',
+    Class = 'class'                         // Placeholder for unknown node types
   }

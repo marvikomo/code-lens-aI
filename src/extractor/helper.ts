@@ -1,16 +1,6 @@
 import { NodeType } from '../enum/NodeType';
 import Parser from 'tree-sitter';
 
-export function getSpecifiedParentNode(node: Parser.SyntaxNode, parentType: string): Parser.SyntaxNode | null {
-    let parentNode = node.parent;
-
-    while(parentNode && parentNode.type !== parentType) {
-        parentNode = parentNode.parent; 
-    }
-
-    return parentNode;
-}
-
 
 export function determineNodeContext(node: Parser.SyntaxNode): { context: string, node: Parser.SyntaxNode, name: string, parentNode: Parser.SyntaxNode | null, type: NodeType } {
     let parent = node;
@@ -177,3 +167,128 @@ export function determineNodeContext(node: Parser.SyntaxNode): { context: string
   
     return null;  // Return null if no parent of the target type is found
   }
+
+   export function determineVariableScope(node: Parser.SyntaxNode): string {
+      // Find closest scope-defining parent
+      let parent = node.parent;
+      let depth = 0;
+      const maxDepth = 10; // Prevent infinite loops
+  
+      while (parent && depth < maxDepth) {
+        if (parent.type === 'program') {
+          return 'module';
+        } else if (parent.type === 'function_declaration' ||
+          parent.type === 'function_expression' ||
+          parent.type === 'arrow_function' ||
+          parent.type === 'method_definition') {
+          return 'function';
+        } else if (parent.type === 'class_declaration' ||
+          parent.type === 'class_expression' ||
+          parent.type === 'class' ||
+          parent.type === 'class_body') {
+          return 'class';
+        } else if (parent.type === 'block') {
+          // Check if this block belongs to a function, class, or is standalone
+          const blockParent = parent.parent;
+          if (blockParent) {
+            if (blockParent.type.includes('function') ||
+              blockParent.type.includes('method')) {
+              return 'function';
+            } else if (blockParent.type.includes('class')) {
+              return 'class';
+            } else if (blockParent.type.includes('if') ||
+              blockParent.type.includes('for') ||
+              blockParent.type.includes('while')) {
+              return 'block';
+            }
+          }
+          return 'block';
+        }
+  
+        parent = parent.parent;
+        depth++;
+      }
+  
+      // Default to module scope if no specific scope found
+      return 'module';
+    }
+
+    /**
+ * Determine if a node is a declaration
+ */
+function isDeclarationNode(node: Parser.SyntaxNode): boolean {
+  const parent = node.parent;
+  if (!parent) return false;
+  
+  // Function declaration
+  if (parent.type === 'function_declaration' && 
+      node === parent.childForFieldName('name')) {
+    return true;
+  }
+  
+  // Variable declaration
+  if (parent.type === 'variable_declarator' && 
+      node === parent.childForFieldName('name')) {
+    return true;
+  }
+  
+  // Class declaration
+  if (parent.type === 'class_declaration' && 
+      node === parent.childForFieldName('name')) {
+    return true;
+  }
+  
+  // Parameter declaration
+  if (parent.type === 'formal_parameters') {
+    return true;
+  }
+  
+  return false;
+}
+
+/**
+ * Determine how a node is being used
+ */
+function determineNodeUsage(node: Parser.SyntaxNode): string {
+  const parent = node.parent;
+  if (!parent) return 'unknown';
+  
+  // Function call
+  if (parent.type === 'call_expression' && 
+      node === parent.childForFieldName('function')) {
+    return 'function_call';
+  }
+  
+  // Assignment target
+  if (parent.type === 'assignment_expression' && 
+      node === parent.childForFieldName('left')) {
+    return 'assignment_target';
+  }
+  
+  // Assignment source
+  if (parent.type === 'assignment_expression' && 
+      node === parent.childForFieldName('right') ||
+      parent.type === 'variable_declarator' && 
+      node === parent.childForFieldName('value')) {
+    return 'assignment_source';
+  }
+  
+  // Function parameter
+  if (parent.type === 'formal_parameters') {
+    return 'parameter';
+  }
+  
+  // Property access
+  if (parent.type === 'member_expression' && 
+      node === parent.childForFieldName('object')) {
+    return 'object_access';
+  }
+  
+  // Return value
+  if (parent.type === 'return_statement') {
+    return 'return_value';
+  }
+  
+  return 'reference';
+}
+

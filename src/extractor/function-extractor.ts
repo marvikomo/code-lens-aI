@@ -4,11 +4,12 @@ import { Neo4jClient } from '../db/neo4j-client'
 import { FunctionNodeService } from '../services/function-node-service'
 
 import { logger } from '../logger'
+import { TreeSitterUtil } from '../util/tree-sitter-util'
 
 export class FunctionExtractor extends Extractor {
   private functionNodeService: FunctionNodeService
-  constructor(dbClient: Neo4jClient) {
-    super(dbClient)
+  constructor(dbClient: Neo4jClient, treeSitterUtil: TreeSitterUtil) {
+    super(dbClient, treeSitterUtil)
     this.functionNodeService = new FunctionNodeService(dbClient)
   }
 

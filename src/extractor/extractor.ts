@@ -1,10 +1,11 @@
 import Parser from 'tree-sitter'
 import { Neo4jClient } from '../db/neo4j-client'
 import { DbUtils } from '../util/db-utils'
+import { TreeSitterUtil } from '../util/tree-sitter-util'
 
 export abstract class Extractor {
   protected dbUtils: DbUtils
-  constructor(protected dbClient: Neo4jClient) {
+  constructor(protected dbClient: Neo4jClient, protected treeSitterUtils:TreeSitterUtil) {
     this.dbUtils = new DbUtils(dbClient)
   }
 
