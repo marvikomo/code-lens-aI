@@ -447,7 +447,7 @@ public async searchClasses(searchParams: {
       `;
       
       // Add LIMIT clause directly in the query
-      query += ` LIMIT ${limit}`;
+      query += ` LIMIT 1`;
       
       // Execute the query
       const results = await this.dbClient.query(query, queryParams);
