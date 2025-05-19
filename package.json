@@ -19,8 +19,12 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@langchain/community": "^0.3.43",
+    "@langchain/core": "^0.3.56",
+    "@supabase/supabase-js": "^2.49.4",
     "dotenv": "^16.5.0",
     "fs": "^0.0.1-security",
+    "langchain": "^0.3.26",
     "neo4j-driver": "^5.28.1",
     "resolve": "^1.22.10",
     "resolve-import": "^2.0.0",
