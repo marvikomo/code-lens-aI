@@ -1,3 +1,5 @@
+import * as path from 'path';
+import * as fs from 'fs';
 import { NodeType } from '../enum/NodeType'
 import Parser from 'tree-sitter'
 
@@ -309,101 +311,138 @@ export class TreeSitterUtil {
     return references
   }
 
-
   public findDeclarationNode(
     tree: Parser.Tree,
     targetName: string,
   ): {
     node: Parser.SyntaxNode
-    type: 'function' | 'class' | 'variable' | 'import' | 'export' | 'method' | 'parameter'
+    type:
+      | 'function'
+      | 'class'
+      | 'variable'
+      | 'import'
+      | 'export'
+      | 'method'
+      | 'parameter'
     parentNode: Parser.SyntaxNode | null
   } | null {
     // Helper function to recursively search the tree
-    const searchNode = (node: Parser.SyntaxNode): {
+    const searchNode = (
+      node: Parser.SyntaxNode,
+    ): {
       node: Parser.SyntaxNode
-      type: 'function' | 'class' | 'variable' | 'import' | 'export' | 'method' | 'parameter'
+      type:
+        | 'function'
+        | 'class'
+        | 'variable'
+        | 'import'
+        | 'export'
+        | 'method'
+        | 'parameter'
       parentNode: Parser.SyntaxNode | null
     } | null => {
       // Check if this node is an identifier with the target name
       if (node.type === 'identifier' && node.text === targetName) {
-        const parent = node.parent;
-        
+        const parent = node.parent
+
         // Check various declaration patterns
         if (parent) {
-          let declarationType: 'function' | 'class' | 'variable' | 'import' | 'export' | 'method' | 'parameter' | null = null;
-          
+          let declarationType:
+            | 'function'
+            | 'class'
+            | 'variable'
+            | 'import'
+            | 'export'
+            | 'method'
+            | 'parameter'
+            | null = null
+
           // Function declaration
-          if (parent.type === 'function_declaration' && 
-              node === parent.childForFieldName('name')) {
-            declarationType = 'function';
+          if (
+            parent.type === 'function_declaration' &&
+            node === parent.childForFieldName('name')
+          ) {
+            declarationType = 'function'
           }
           // Variable declaration
-          else if (parent.type === 'variable_declarator' && 
-                  node === parent.childForFieldName('name')) {
-            declarationType = 'variable';
+          else if (
+            parent.type === 'variable_declarator' &&
+            node === parent.childForFieldName('name')
+          ) {
+            declarationType = 'variable'
           }
           // Class declaration
-          else if (parent.type === 'class_declaration' && 
-                  node === parent.childForFieldName('name')) {
-            declarationType = 'class';
+          else if (
+            parent.type === 'class_declaration' &&
+            node === parent.childForFieldName('name')
+          ) {
+            declarationType = 'class'
           }
           // Method declaration
-          else if (parent.type === 'method_definition' && 
-                  node === parent.childForFieldName('name')) {
-            declarationType = 'method';
+          else if (
+            parent.type === 'method_definition' &&
+            node === parent.childForFieldName('name')
+          ) {
+            declarationType = 'method'
           }
           // Import declaration - named import
-          else if (parent.type === 'import_specifier' && 
-                  (node === parent.childForFieldName('name') || 
-                   node === parent.childForFieldName('alias'))) {
-            declarationType = 'import';
+          else if (
+            parent.type === 'import_specifier' &&
+            (node === parent.childForFieldName('name') ||
+              node === parent.childForFieldName('alias'))
+          ) {
+            declarationType = 'import'
           }
           // Import declaration - namespace import
           else if (parent.type === 'namespace_import') {
-            declarationType = 'import';
+            declarationType = 'import'
           }
           // Import declaration - default import
-          else if (parent.type === 'import_clause' && 
-                  node === parent.firstChild) {
-            declarationType = 'import';
+          else if (
+            parent.type === 'import_clause' &&
+            node === parent.firstChild
+          ) {
+            declarationType = 'import'
           }
           // Export declaration
-          else if (parent.type === 'export_specifier' && 
-                  node === parent.childForFieldName('name')) {
-            declarationType = 'export';
+          else if (
+            parent.type === 'export_specifier' &&
+            node === parent.childForFieldName('name')
+          ) {
+            declarationType = 'export'
           }
           // Parameter declaration
           else if (parent.type === 'formal_parameters') {
-            declarationType = 'parameter';
+            declarationType = 'parameter'
           }
-          
+
           // If we identified this as a declaration, return it immediately
           if (declarationType) {
             return {
               node,
               type: declarationType,
-              parentNode: parent
-            };
+              parentNode: parent,
+            }
           }
         }
       }
-      
+
       // Recursively search all children
       for (let i = 0; i < node.childCount; i++) {
-        const child = node.child(i);
+        const child = node.child(i)
         if (child) {
-          const result = searchNode(child);
+          const result = searchNode(child)
           if (result) {
-            return result; // Return the first declaration found
+            return result // Return the first declaration found
           }
         }
       }
-      
-      return null; // No declaration found in this branch
-    };
-    
+
+      return null // No declaration found in this branch
+    }
+
     // Start the search from the root node
-    return searchNode(tree.rootNode);
+    return searchNode(tree.rootNode)
   }
   /**
    * Determine if a node is a declaration
@@ -497,4 +536,258 @@ export class TreeSitterUtil {
 
     return 'reference'
   }
+
+  public resolveImport(allFiles: string[], currentFile: string, importSource: string): string | null {
+    const currentDir = path.dirname(currentFile);
+    const resolvedPath = path.resolve(currentDir, importSource);
+     console.log("Resolved Path:", resolvedPath);
+    // Common extensions to try
+    const extensions = ['', '.js', '.jsx', '.ts', '.tsx', '.json'];
+    
+    for (const ext of extensions) {
+      const fullPath = resolvedPath + ext;
+      if (allFiles.includes(fullPath)) {
+        return fullPath;
+      }
+    }
+    
+    return null;
+  }
+
+  /**
+ * Find the scope where a node is used
+ * @param node The node to find the scope for
+ * @returns Scope information
+ */
+public findNodeScope(node: Parser.SyntaxNode): {
+  type: 'function' | 'method' | 'class' | 'constructor' | 'block' | 'module';
+  name: string;
+  node: Parser.SyntaxNode;
+  fullContext: string;
+  startLine: number;
+  endLine: number;
+  startColumn: number;
+  endColumn: number;
+} {
+  let current = node.parent;
+  let depth = 0;
+  const maxDepth = 50;
+  
+  while (current && depth < maxDepth) {
+    // Function declarations
+    if (current.type === 'function_declaration') {
+      const nameNode = current.childForFieldName('name');
+      return {
+        type: 'function',
+        name: nameNode ? nameNode.text : '<anonymous>',
+        node: current,
+        fullContext: `Function: ${nameNode ? nameNode.text : '<anonymous>'}`,
+        startLine: current.startPosition.row,
+        endLine: current.endPosition.row,
+        startColumn: current.startPosition.column,
+        endColumn: current.endPosition.column
+      };
+    }
+    
+    // Arrow functions
+    if (current.type === 'arrow_function') {
+      let funcName = '<anonymous>';
+      let parent = current.parent;
+      if (parent?.type === 'variable_declarator') {
+        const nameNode = parent.childForFieldName('name');
+        if (nameNode) funcName = nameNode.text;
+      }
+      return {
+        type: 'function',
+        name: funcName,
+        node: current,
+        fullContext: `Arrow Function: ${funcName}`,
+        startLine: current.startPosition.row,
+        endLine: current.endPosition.row,
+        startColumn: current.startPosition.column,
+        endColumn: current.endPosition.column
+      };
+    }
+    
+    // Function expressions
+    if (current.type === 'function_expression') {
+      let funcName = '<anonymous>';
+      const nameNode = current.childForFieldName('name');
+      if (nameNode) {
+        funcName = nameNode.text;
+      } else {
+        let parent = current.parent;
+        if (parent?.type === 'variable_declarator') {
+          const varNameNode = parent.childForFieldName('name');
+          if (varNameNode) funcName = varNameNode.text;
+        }
+      }
+      return {
+        type: 'function',
+        name: funcName,
+        node: current,
+        fullContext: `Function Expression: ${funcName}`,
+        startLine: current.startPosition.row,
+        endLine: current.endPosition.row,
+        startColumn: current.startPosition.column,
+        endColumn: current.endPosition.column
+      };
+    }
+    
+    // Method definitions
+    if (current.type === 'method_definition') {
+      const methodName = current.childForFieldName('name')?.text || '<anonymous>';
+      
+      let className = '';
+      let classSearch = current.parent;
+      while (classSearch) {
+        if (classSearch.type === 'class_declaration' || classSearch.type === 'class') {
+          const classNameNode = classSearch.childForFieldName('name');
+          if (classNameNode) {
+            className = classNameNode.text;
+            break;
+          }
+        }
+        classSearch = classSearch.parent;
+      }
+      
+      return {
+        type: methodName === 'constructor' ? 'constructor' : 'method',
+        name: methodName,
+        node: current,
+        fullContext: className ? `${className}.${methodName}` : methodName,
+        startLine: current.startPosition.row,
+        endLine: current.endPosition.row,
+        startColumn: current.startPosition.column,
+        endColumn: current.endPosition.column
+      };
+    }
+    
+    // Class declarations
+    if (current.type === 'class_declaration' || current.type === 'class') {
+      const nameNode = current.childForFieldName('name');
+      const className = nameNode ? nameNode.text : '<anonymous>';
+      return {
+        type: 'class',
+        name: className,
+        node: current,
+        fullContext: `Class: ${className}`,
+        startLine: current.startPosition.row,
+        endLine: current.endPosition.row,
+        startColumn: current.startPosition.column,
+        endColumn: current.endPosition.column
+      };
+    }
+    
+    // If we reach the program/module level
+    if (current.type === 'program') {
+      return {
+        type: 'module',
+        name: 'module',
+        node: current,
+        fullContext: 'Module/Global Scope',
+        startLine: current.startPosition.row,
+        endLine: current.endPosition.row,
+        startColumn: current.startPosition.column,
+        endColumn: current.endPosition.column
+      };
+    }
+    
+    current = current.parent;
+    depth++;
+  }
+  
+  // Default to module scope if nothing found
+  const rootNode = node.tree.rootNode;
+  return {
+    type: 'module',
+    name: 'module',
+    node: rootNode,
+    fullContext: 'Module/Global Scope',
+    startLine: rootNode.startPosition.row,
+    endLine: rootNode.endPosition.row,
+    startColumn: rootNode.startPosition.column,
+    endColumn: rootNode.endPosition.column
+  };
+}
+
+
+  /**
+ * Find all usages of an imported identifier in the tree
+ * @param tree Parser tree to search in
+ * @param importedName The name of the imported identifier to find
+ * @param importNode Optional: The import declaration node to exclude from results
+ * @returns Array of usage information
+ */
+  public findImportedIdentifierUsages(
+    tree: Parser.Tree,
+    importedName: string
+  ): Array<{
+    node: Parser.SyntaxNode;
+    usage: string;
+    line: number;
+    column: number;
+    context: string;
+    parentType: string;
+    scope: {
+      node: Parser.SyntaxNode;
+      type: 'function' | 'method' | 'class' | 'constructor' | 'block' | 'module';
+      name: string;
+      fullContext: string;
+      startLine: number;
+      endLine: number;
+      startColumn: number;
+      endColumn: number;
+    };
+  }> {
+    const references = this.findReferences(tree, importedName);
+  
+    const isPartOfImport = (node: Parser.SyntaxNode): boolean => {
+      let current = node.parent;
+      while (current) {
+        if (
+          current.type === 'import_statement' ||
+          current.type === 'import_specifier' ||
+          current.type === 'namespace_import' ||
+          current.type === 'import_clause' ||
+          current.type === 'named_imports' ||
+          current.type === 'import'
+        ) {
+          return true;
+        }
+        current = current.parent;
+      }
+      return false;
+    };
+    
+    const usages = references
+      .filter(ref => !isPartOfImport(ref.node))
+      .map(ref => {
+        const context = this.determineNodeContext(ref.node);
+        const scope = this.findNodeScope(ref.node);
+        
+        return {
+          node: ref.node,
+          usage: ref.usage,
+          line: ref.node.startPosition.row + 1,
+          column: ref.node.startPosition.column + 1,
+          context: context.context,
+          parentType: ref.node.parent?.type || 'unknown',
+          scope: {
+            node: scope.node,
+            type: scope.type,
+            name: scope.name,
+            fullContext: scope.fullContext,
+            startLine: scope.startLine,
+            endLine: scope.endLine,
+            startColumn: scope.startColumn,
+            endColumn: scope.endColumn
+          }
+        };
+      });
+    
+    return usages;
+  }
+  
+
 }

@@ -5,11 +5,21 @@ import { Extractor } from './extractor';
 import { Neo4jClient } from '../db/neo4j-client';
 import { DbSchema } from '../db/schema';
 import { TreeSitterUtil } from '../util/tree-sitter-util';
-
+import { resolveImport } from 'resolve-import';
+import { ClassNodeService } from '../services/class-node-service';
+import { FunctionNodeService } from '../services/function-node-service';
+import { ImportNodeService } from '../services/import-node-service';
 
 export class ImportExtractor extends Extractor {
+  private functionNodeService: FunctionNodeService;
+  private classNodeService: ClassNodeService;
+  private importNodeService: ImportNodeService;
+  
   constructor(dbClient: Neo4jClient, treeSitterUtil: TreeSitterUtil) {
     super(dbClient, treeSitterUtil);
+    this.functionNodeService = new FunctionNodeService(dbClient);
+    this.classNodeService = new ClassNodeService(dbClient);
+    this.importNodeService = new ImportNodeService(dbClient, treeSitterUtil);
   }
   
   /**
@@ -19,18 +29,25 @@ export class ImportExtractor extends Extractor {
     tree: Parser.Tree, 
     content: string, 
     filePath: string, 
-    query: Parser.Query
+    query: Parser.Query,
+    files: string[],
   ): Promise<void> {
     // Ensure module node exists
     await this.ensureModuleNode(filePath);
   
     const matches = query.matches(tree.rootNode);
+
+
+    let importFilter = matches.filter(match => {
+      const captureNames = match.captures.map((c) => c.name)
+      return captureNames.some(name => name === 'import_statement')
+    })
     
     // Process in batches
     const batchSize = 20;
     for (let i = 0; i < matches.length; i += batchSize) {
       const batch = matches.slice(i, i + batchSize);
-      await this.processImportBatch(batch, filePath);
+      await this.processImportBatch(importFilter, filePath, files, tree);
     }
     
     console.log(`Extracted ${matches.length} imports from ${filePath}`);
@@ -41,24 +58,81 @@ export class ImportExtractor extends Extractor {
    */
   private async processImportBatch(
     matches: Parser.QueryMatch[], 
-    filePath: string
+    filePath: string,
+    files: string[],
+    tree: Parser.Tree
   ): Promise<void> {
-    await this.dbClient.runInTransaction(async (session) => {
+  
+      var importMap = new Map<string, any>();
+
       for (const match of matches) {
+       // console.log("match", match.captures)
         // Handle ES6 import statements
-        if (match.captures.some(c => c.name === 'import_statement')) {
-          await this.processES6Import(match, filePath, session);
-        } 
-        // Handle require statements
-        else if (match.captures.some(c => c.name === 'require')) {
-          await this.processRequireImport(match, filePath, session);
+
+        let nameCapture = match.captures.find(c => c.name === 'name');
+
+        let statementCapture = match.captures.find(c =>  c.name === 'import_statement');
+
+        if(!nameCapture && !statementCapture) continue;
+
+         
+        // console.log("statement", statementCapture)
+    
+        let importName = nameCapture.node.text;
+
+        if(!importMap.has(importName)) {
+          importMap.set(importName, {
+            importId: null,
+            importName: importName,
+            importCode: statementCapture.node.text,
+            importSource: '',
+            context: '',
+            filePath: filePath,
+            lineStart: statementCapture.node.startPosition.row,
+            lineEnd: statementCapture.node.endPosition.row,
+            columnStart: statementCapture.node.startPosition.column,
+            columnEnd: statementCapture.node.endPosition.column,
+          })
         }
-        // Handle dynamic imports
-        else if (match.captures.some(c => c.name === 'dynamic_import')) {
-          await this.processDynamicImport(match, filePath, session);
+
+        const variableId = this.generateNodeId(
+          'imp',
+          importName,
+          filePath,
+          statementCapture.node.startPosition.row,
+          statementCapture.node.startPosition.column,
+        )
+
+        
+        let importDetails = importMap.get(importName);
+
+        importDetails.importId = variableId;
+
+        let importSource = match.captures.find(c => c.name === 'source').node.text;
+        
+         
+        importDetails.importSource = importSource;
+
+        importDetails.context = `This is an import with source ${importSource} and name ${importName}`;
+
+       //let usageArr =  this.treeSitterUtils.findImportedIdentifierUsages(tree, importName);
+       await this.importNodeService.indexImportsInBatch(importMap);
+
+        let line = match.captures.some(c => c.node.startPosition.row + 1 === 9)
+        if(line) {
+       
+       
+         // console.log("usage", usage)
+          //console.log("parent", usage.forEach(e => console.log("xx",e.node.parent)))
+          console.log("name", importName)
+      
+   
+          console.log("mkl", match.captures)
         }
+
+       
       }
-    });
+
   }
   
   /**

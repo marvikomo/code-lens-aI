@@ -267,19 +267,36 @@ export const ClassQuery = `
 
 
 export const ImportQuery =`
-; Import statements
+;; Default imports
 (import_statement
-  source: (string) @import_source
-  (import_specifier
-    name: (identifier) @import_specifier)?
   (import_clause
-    (identifier) @import_default)?
+    (identifier) @name)
+  source: (string) @source
 ) @import_statement
+
+;; Namespace imports
+(import_statement
+  (import_clause
+    (namespace_import
+      (identifier) @name))
+  source: (string) @source
+) @import_statement
+
+;; Named imports
+(import_statement
+  (import_clause
+    (named_imports
+      (import_specifier
+        name: (identifier) @name
+        alias: (identifier)? @alias)?))
+  source: (string) @source
+) @import_statement
+
 
 ; Require statements
 (call_expression
-  function: (identifier) @require
-  arguments: (arguments (string) @require_path))
+  function: (identifier) @name
+  arguments: (arguments (string) @source)) @require_statement
 `;
 
 export const ExportQuery = `;; Export query for JavaScript/TypeScript

@@ -177,11 +177,12 @@ export class CodeAnalyzer {
                    const variableQuery = this.registry.get(language).queries.variables;
                    
 
+                    await this.importExtractor.extract(tree, content, filePath, importQuery, files);
+
                     await this.functionExtractor.extract(tree, content, filePath, functionQuery);
 
                     await this.classExtractor.extract(tree, content, filePath, classQuery);
 
-                     //await this.importExtractor.extract(tree, content, filePath, importQuery);
                      await this.exportExtractor.extract(tree, content, filePath, exportQuery);
 
                      await this.variableExtractor.extract(tree, content, filePath, variableQuery);

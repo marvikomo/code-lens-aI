@@ -13,7 +13,7 @@ export class FunctionNodeService {
   }
 
   // Public function to index a function by passing the function node
-  protected async indexFunction(
+  public async indexFunction(
     functionNode: Parser.SyntaxNode,
     funcName: string,
     filePath: string,
