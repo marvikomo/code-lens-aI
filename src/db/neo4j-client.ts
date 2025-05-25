@@ -106,6 +106,71 @@ export class Neo4jClient {
       session.close();
     }
   }
+
+  async getDriver(): Promise<Driver> {
+    if (!this.driver) {
+      throw new Error('Neo4j driver not initialized');
+    }
+    return this.driver;
+  }
+
+  /**
+ * Get the graph schema including labels, relationships, properties, constraints, and indexes
+ */
+async getSchema(): Promise<{
+  labels: string[];
+  relationshipTypes: string[];
+  propertyKeys: string[];
+  constraints: any[];
+  indexes: any[];
+}> {
+  const session = this.getSession();
+  
+  try {
+    // Get all node labels
+    const labelsResult = await session.run('CALL db.labels()');
+    const labels = labelsResult.records.map(record => record.get('label'));
+    
+    // Get all relationship types
+    const relationshipTypesResult = await session.run('CALL db.relationshipTypes()');
+    const relationshipTypes = relationshipTypesResult.records.map(record => record.get('relationshipType'));
+    
+    // Get all property keys
+    const propertyKeysResult = await session.run('CALL db.propertyKeys()');
+    const propertyKeys = propertyKeysResult.records.map(record => record.get('propertyKey'));
+    
+    // Get constraints
+    const constraintsResult = await session.run('SHOW CONSTRAINTS');
+    const constraints = constraintsResult.records.map(record => ({
+      name: record.get('name'),
+      type: record.get('type'),
+      entityType: record.get('entityType'),
+      labelsOrTypes: record.get('labelsOrTypes'),
+      properties: record.get('properties')
+    }));
+    
+    // Get indexes
+    const indexesResult = await session.run('SHOW INDEXES');
+    const indexes = indexesResult.records.map(record => ({
+      name: record.get('name'),
+      type: record.get('type'),
+      entityType: record.get('entityType'),
+      labelsOrTypes: record.get('labelsOrTypes'),
+      properties: record.get('properties'),
+      state: record.get('state')
+    }));
+    
+    return {
+      labels,
+      relationshipTypes,
+      propertyKeys,
+      constraints,
+      indexes
+    };
+  } finally {
+    session.close();
+  }
+}
   
   /**
    * Close the Neo4j driver
