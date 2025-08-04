@@ -1,5 +1,8 @@
 import { OpenAIEmbeddings } from '@langchain/openai'
 import { ChatOpenAI } from '@langchain/openai'
+import { PromptTemplate } from '@langchain/core/prompts'
+import { z } from 'zod'
+import { Graph } from 'graphlib'
 import {
   CallNode,
   ClassNode,
@@ -24,6 +27,12 @@ interface InferenceData {
   embedding?: number[]
 }
 
+interface DocstringRequest {
+  nodeId: string
+  text: string
+  nodeType: string
+}
+
 export type NodeWithInference = (
   | ModuleNode
   | FunctionNode
@@ -36,10 +45,28 @@ export type NodeWithInference = (
 ) &
   InferenceData
 
+const DocstringNodeSchema = z.object({
+  nodeId: z.string(),
+  docstring: z.string(),
+  tags: z.array(z.string()),
+})
+
+const DocstringResponseSchema = z.object({
+  docstrings: z.array(DocstringNodeSchema),
+})
+
+type DocstringResponse = z.infer<typeof DocstringResponseSchema>
+
 export class LangChainInferenceService {
   private embeddings: OpenAIEmbeddings
+  private llm: ChatOpenAI
 
-  constructor() {
+  constructor(options?: {
+    maxConcurrentBatches?: number
+    batchDelay?: number
+    maxConcurrentEmbeddings?: number
+  }) {
+    // Rate limiting configuration
 
     // Initialize LangChain components
     this.embeddings = new OpenAIEmbeddings({
@@ -67,6 +94,65 @@ export class LangChainInferenceService {
   async generateEmbedding(text: string): Promise<number[]> {
     const embedding = await this.embeddings.embedQuery(text)
     return embedding
+  }
+
+  // Generate response using modern withStructuredOutput approach
+  async generateResponse(
+    batch: DocstringRequest[],
+  ): Promise<DocstringResponse> {
+
+    const structuredLLM = this.llm.withStructuredOutput(
+      DocstringResponseSchema,
+      {
+        method: 'json_schema',
+      },
+    )
+
+    const prompt = PromptTemplate.fromTemplate(`    
+        You are a senior software engineer with expertise in code analysis and documentation. Your task is to generate concise docstrings for each code snippet and tag it based on its purpose.    
+        
+        **Instructions**:    
+        1. **Identify Code Type**: Determine whether each code snippet is primarily **backend** or **frontend**.    
+        2. **Summarize the Purpose**: Write a brief (1-2 sentences) summary of the code's main purpose and functionality.    
+        3. **Assign Tags**: Use these specific tags based on code type:    
+        
+        **Backend Tags**: AUTH, DATABASE, API, UTILITY, PRODUCER, CONSUMER, EXTERNAL_SERVICE, CONFIGURATION    
+        **Frontend Tags**: UI_COMPONENT, FORM_HANDLING, STATE_MANAGEMENT, DATA_BINDING, ROUTING, EVENT_HANDLING, STYLING, MEDIA, ANIMATION, ACCESSIBILITY, DATA_FETCHING    
+    
+        Here are the code snippets:    
+        {code_snippets}    
+    `)
+
+
+      console.log('batch cnt', await this.estimateTokens(JSON.stringify(batch)))
+    const codeSnippets = batch
+      .map(
+        (req) =>
+          `ID: ${req.nodeId}\nType: ${req.nodeType}\nCode: ${req.text.substring(
+            0,
+            500,
+          )}`,
+      ) // Limit length
+      .join('\n---\n')
+
+    try {
+      const formattedPrompt = await prompt.format({
+        code_snippets: codeSnippets,
+      })
+      // The structured LLM automatically handles parsing - no need for manual parsing
+      const response = await structuredLLM.invoke(formattedPrompt)
+      if (response) {
+        console.log('Just successfully processed')
+      }
+      return response
+    } catch (error) {
+      console.error('LLM request failed:', error)
+      return { docstrings: [] }
+    }
+  }
+
+  private async estimateTokens(text: string): Promise<number> {
+    return await this.llm.getNumTokens(text)
   }
 
  
