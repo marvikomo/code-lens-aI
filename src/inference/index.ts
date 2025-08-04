@@ -27,6 +27,38 @@ interface InferenceData {
   embedding?: number[]
 }
 
+
+class AsyncSemaphore {
+  private permits: number
+  private queue: Array<() => void> = []
+
+  constructor(permits: number) {
+    this.permits = permits
+  }
+
+  async acquire(): Promise<() => void> {
+    return new Promise((resolve) => {
+      if (this.permits > 0) {
+        this.permits--
+        resolve(() => this.release())
+      } else {
+        this.queue.push(() => {
+          this.permits--
+          resolve(() => this.release())
+        })
+      }
+    })
+  }
+
+  private release(): void {
+    this.permits++
+    if (this.queue.length > 0) {
+      const next = this.queue.shift()!
+      next()
+    }
+  }
+}
+
 interface DocstringRequest {
   nodeId: string
   text: string
@@ -60,6 +92,10 @@ type DocstringResponse = z.infer<typeof DocstringResponseSchema>
 export class LangChainInferenceService {
   private embeddings: OpenAIEmbeddings
   private llm: ChatOpenAI
+  private geminiLLm: ChatGoogleGenerativeAI
+  private maxConcurrentBatches: number
+  private batchDelay: number
+  private maxConcurrentEmbeddings: number
 
   constructor(options?: {
     maxConcurrentBatches?: number
@@ -67,6 +103,9 @@ export class LangChainInferenceService {
     maxConcurrentEmbeddings?: number
   }) {
     // Rate limiting configuration
+    this.maxConcurrentBatches = options?.maxConcurrentBatches ?? 5
+    this.batchDelay = options?.batchDelay ?? 1000 
+    this.maxConcurrentEmbeddings = options?.maxConcurrentEmbeddings ?? 100
 
     // Initialize LangChain components
     this.embeddings = new OpenAIEmbeddings({
@@ -150,6 +189,68 @@ export class LangChainInferenceService {
       return { docstrings: [] }
     }
   }
+
+  // Process batches with controlled concurrency to avoid rate limits
+  private async processWithConcurrency(
+  batches: DocstringRequest[][],
+): Promise<DocstringResponse['docstrings']> {
+  const allDocstrings: DocstringResponse['docstrings'] = []
+  const semaphore = new AsyncSemaphore(this.maxConcurrentBatches)
+  
+  console.log(`Processing ${batches.length} batches with async semaphore (max concurrent: ${this.maxConcurrentBatches})`)
+  
+  const limitedBatches = batches.slice(0, 1)
+  // Create promises for all batches
+  const batchPromises = batches.map(async (batch, index) => {
+    // Wait for semaphore slot
+    const release = await semaphore.acquire()
+    const batchId = index + 1
+    const startTime = Date.now()
+    
+    try {
+      console.log(`Batch ${batchId} started`)
+      const response = await this.generateResponse(batch)
+      const duration = Date.now() - startTime
+      
+      console.log(`✅ Batch ${batchId} completed in ${duration}ms - got ${response.docstrings.length} docstrings`)
+      
+      return {
+        success: true,
+        docstrings: response.docstrings,
+        batchId,
+        duration
+      }
+    } catch (error) {
+      const duration = Date.now() - startTime
+      console.log(`❌ Batch ${batchId} failed after ${duration}ms: ${error.message}`)
+      
+      return {
+        success: false,
+        docstrings: [],
+        batchId,
+        duration,
+        error: error.message
+      }
+    } finally {
+      release() 
+    }
+  })
+  
+  // Wait for all batches to complete
+  const results = await Promise.all(batchPromises)
+  
+  // Collect successful results
+  const successful = results.filter(r => r.success)
+  const failed = results.filter(r => !r.success)
+  
+  successful.forEach(result => {
+    allDocstrings.push(...result.docstrings)
+  })
+  
+  console.log(`🎉 Processing complete! ${successful.length} successful, ${failed.length} failed, ${allDocstrings.length} total docstrings`)
+  
+  return allDocstrings
+}
 
   private async estimateTokens(text: string): Promise<number> {
     return await this.llm.getNumTokens(text)
