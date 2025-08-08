@@ -135,6 +135,152 @@ export class LangChainInferenceService {
     return embedding
   }
 
+  // Batch nodes for processing
+  private async batchNodes(
+  nodes: NodeWithInference[],
+  maxTokens: number = 5000,
+): Promise<DocstringRequest[][]> {
+  const batches: DocstringRequest[][] = []
+  let currentBatch: DocstringRequest[] = []
+  let currentTokens = 0
+
+  // Create a lookup dictionary for nodes by their ID
+  const nodeDict: Record<string, NodeWithInference> = {}
+  nodes.forEach(node => {
+    const nodeId = node.id
+    nodeDict[nodeId] = node
+  })
+
+  // Function to replace referenced text with actual content
+  const replaceReferencedText = (text: string, nodeDict: Record<string, NodeWithInference>): string => {
+
+    const pattern = /Code replaced for brevity\. See node_id ([a-f0-9]+)/g
+    
+    let previousText = null
+    let currentText = text
+
+    // Keep replacing until no more replacements are possible
+    while (previousText !== currentText) {
+      previousText = currentText
+      currentText = currentText.replace(pattern, (match, nodeId) => {
+        if (nodeDict[nodeId]) {
+          const referencedNode = nodeDict[nodeId]
+          const referencedText = this.extractNodeText(referencedNode)
+          // Split on first newline and return the rest (skip the first line)
+          const lines = referencedText.split('\n')
+          return lines.length > 1 ? '\n' + lines.slice(1).join('\n') : referencedText
+        }
+        return match // Return original if node not found
+      })
+    }
+
+    return currentText
+  }
+
+  // Process each node
+  for (const node of nodes) {
+    const nodeText = this.extractNodeText(node)
+    
+    if (!nodeText || nodeText.trim().length === 0) {
+      console.warn(`Node ${this.generateNodeId(node)} has no text. Skipping...`)
+      continue
+    }
+
+    // Replace any referenced content with actual content
+    const updatedText = replaceReferencedText(nodeText, nodeDict)
+    const nodeTokens = await this.estimateTokens(updatedText)
+
+    console.log(`Node ${this.generateNodeId(node)}: ${nodeTokens} tokens`)
+
+    // Skip nodes that exceed the max token limit
+    if (nodeTokens > maxTokens) {
+      console.warn(
+        `Node ${this.generateNodeId(node)} - ${nodeTokens} tokens, has exceeded the max_tokens limit. Skipping...`
+      )
+      continue
+    }
+
+    // Start a new batch if adding this node would exceed the limit
+    if (currentTokens + nodeTokens > maxTokens) {
+      if (currentBatch.length > 0) { // Only append if there are items
+        batches.push(currentBatch)
+      }
+      currentBatch = []
+      currentTokens = 0
+    }
+
+    // Add node to current batch
+    currentBatch.push({
+      nodeId: node.id,
+      text: updatedText,
+      nodeType: node.type,
+    })
+    currentTokens += nodeTokens
+  }
+
+  // Add the final batch if it has content
+  if (currentBatch.length > 0) {
+    batches.push(currentBatch)
+  }
+
+  // Log batching statistics
+  const totalNodes = batches.reduce((sum, batch) => sum + batch.length, 0)
+  console.log(`Batched ${totalNodes} nodes into ${batches.length} batches`)
+  console.log(`Batch sizes: [${batches.map(batch => batch.length).join(', ')}]`)
+
+  return batches
+}
+
+  private extractNodeText(node: NodeWithInference): string {
+    switch (node.type) {
+      case 'function':
+        let functionCalls = []
+        try {
+          functionCalls = node.calls ? JSON.parse(node.calls) : []
+        } catch (error) {
+          console.warn('Failed to parse function calls:', error)
+          functionCalls = []
+        }
+
+        const callsText =
+          functionCalls
+            .map((call) => `${call.name} (${call.callType})`)
+            .join(', ') || 'No calls'
+
+        return `Function: ${node.name}\\nSignature: ${node.signature}\\nClass: ${node.classBelongTo}\\nCalls: ${callsText}\\nCode:\\n${node.code}`
+      case 'class':
+        let members = []
+        try {
+          members = node.members ? JSON.parse(node.members) : []
+        } catch (error) {
+          console.warn('Failed to parse class members:', error)
+          members = []
+        }
+
+        const membersText =
+          members.map((m) => `${m.memberType}: ${m.signature}`).join('\\n') ||
+          ''
+
+        return `Class: ${node.name}\\nInheritance: ${
+          node.inheritance || 'none'
+        }\\nMembers:\\n${membersText}`
+      case 'module':
+        return `Module: ${node.path}`
+      case 'import':
+        return `Import: ${node.code}`
+      case 'export':
+        return `export: ${node.code}`
+      case 'calls':
+        return `Call: ${node.name}(${node.args}) \n code: ${node.code}`
+      case 'file':
+        return `File: ${node.name}\nExtension: ${
+          node.extension
+        }\nContent:\n${node.content?.substring(0, 1000)}...`
+      default:
+        return `${node.type}: ${JSON.stringify(node)}`
+    }
+  }
+
   // Generate response using modern withStructuredOutput approach
   async generateResponse(
     batch: DocstringRequest[],
@@ -251,6 +397,25 @@ export class LangChainInferenceService {
   
   return allDocstrings
 }
+
+  private generateNodeId(node: NodeWithInference): string {
+
+    switch (node.type) {
+      case 'function':
+        return `${node.moduleDefinedIn}:${node.name}:${node.startLine}:${node.endLine}`
+      case 'class':
+        return `${node.moduleDefinedIn}:${node.name}:${node.startLine}:${node.endLine}`
+      case 'module':
+        return `mod:${node.path}`
+      case 'file':
+        return `${node.filePath}:${node.name}:1:${node.lines}`
+      default:
+        return `${node.type}:${node.startLine || 0}`
+    }
+  }
+
+
+  
 
   private async estimateTokens(text: string): Promise<number> {
     return await this.llm.getNumTokens(text)
