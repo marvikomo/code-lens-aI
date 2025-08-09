@@ -398,6 +398,98 @@ export class LangChainInferenceService {
   return allDocstrings
 }
 
+  // Process embeddings with controlled concurrency
+  private async processEmbeddingsWithConcurrency(
+    nodes: NodeWithInference[],
+    docstrings: DocstringResponse['docstrings'],
+  ): Promise<NodeWithInference[]> {
+    const updatedNodes: NodeWithInference[] = []
+
+    for (let i = 0; i < nodes.length; i += this.maxConcurrentEmbeddings) {
+      const nodeSlice = nodes.slice(i, i + this.maxConcurrentEmbeddings)
+
+      console.log(
+        `Processing embeddings ${i + 1}-${Math.min(
+          i + this.maxConcurrentEmbeddings,
+          nodes.length,
+        )}/${nodes.length}`,
+      )
+
+      const embeddingPromises = nodeSlice.map(async (node) => {
+        const nodeId = node.id
+        const docstringData = docstrings.find((d) => d.nodeId === nodeId)
+        if (docstringData) {
+          try {
+            const embedding = await this.generateEmbedding(
+              docstringData.docstring,
+            )
+            return {
+              ...node,
+              docstring: docstringData.docstring,
+              tags: docstringData.tags,
+              embedding,
+            }
+          } catch (error) {
+            console.error(
+              `Embedding generation failed for node ${nodeId}:`,
+              error,
+            )
+            return node
+          }
+        }
+
+        return node
+      })
+
+      const results = await Promise.all(embeddingPromises)
+      updatedNodes.push(...results)
+
+      // Small delay between embedding groups
+      if (i + this.maxConcurrentEmbeddings < nodes.length) {
+        await new Promise((resolve) => setTimeout(resolve, 500))
+      }
+    }
+
+    return updatedNodes
+  }
+
+
+
+  // Main inference method with rate limiting
+  async runInference(graph: Graph): Promise<NodeWithInference[]> {
+    console.log('Starting inference with rate limiting...')
+
+
+    const nodes: NodeWithInference[] = []
+    const nodeIds = graph.nodes()
+
+    for (const nodeId of nodeIds) {
+      const nodeData = graph.node(nodeId)
+      if (nodeData) {
+        nodes.push({id:nodeId, ...nodeData} as NodeWithInference)
+      }
+    }
+ 
+    console.log(`Processing ${nodes.length} nodes...`)
+
+    const batches = await this.batchNodes(nodes)
+    console.log(`Created ${batches.length} batches for processing`)
+
+    // Process batches with controlled concurrency
+    const allDocstrings = await this.processWithConcurrency(batches)
+    console.log(`Generated ${allDocstrings.length} docstrings`)
+
+    // Process embeddings with controlled concurrency
+    const updatedNodes = await this.processEmbeddingsWithConcurrency(
+      nodes,
+      allDocstrings,
+    )
+    console.log('Inference completed')
+    console.log('updated nodes', updatedNodes)
+
+    return updatedNodes
+  }
+
   private generateNodeId(node: NodeWithInference): string {
 
     switch (node.type) {
