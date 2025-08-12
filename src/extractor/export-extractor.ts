@@ -4,11 +4,13 @@ import { DbSchema } from '../db/schema';
 import { Neo4jClient } from "../db/neo4j-client";
 import { logger } from '../logger';
 import { TreeSitterUtil } from '../util/tree-sitter-util';
+import { CodeVectorStore } from '../vector-store';
+import { Graph } from 'graphlib';
 
 export class ExportExtractor extends Extractor {
 
-  constructor(dbClient: Neo4jClient, treeSitterUtil: TreeSitterUtil) {
-    super(dbClient, treeSitterUtil);
+  constructor(dbClient: Neo4jClient, treeSitterUtil: TreeSitterUtil, vectorStore: CodeVectorStore, graph: Graph){
+    super(dbClient, treeSitterUtil, vectorStore, graph);
   }
 
   /**

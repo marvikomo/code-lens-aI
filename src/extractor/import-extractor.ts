@@ -9,14 +9,16 @@ import { resolveImport } from 'resolve-import';
 import { ClassNodeService } from '../services/class-node-service';
 import { FunctionNodeService } from '../services/function-node-service';
 import { ImportNodeService } from '../services/import-node-service';
+import { CodeVectorStore } from '../vector-store';
+import { Graph } from 'graphlib';
 
 export class ImportExtractor extends Extractor {
   private functionNodeService: FunctionNodeService;
   private classNodeService: ClassNodeService;
   private importNodeService: ImportNodeService;
   
-  constructor(dbClient: Neo4jClient, treeSitterUtil: TreeSitterUtil) {
-    super(dbClient, treeSitterUtil);
+  constructor(dbClient: Neo4jClient, treeSitterUtil: TreeSitterUtil, vectorStore: CodeVectorStore, graph: Graph) {
+    super(dbClient, treeSitterUtil, vectorStore, graph);
     this.functionNodeService = new FunctionNodeService(dbClient);
     this.classNodeService = new ClassNodeService(dbClient);
     this.importNodeService = new ImportNodeService(dbClient, treeSitterUtil);

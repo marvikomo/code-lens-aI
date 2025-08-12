@@ -2,10 +2,26 @@ import { OpenAIEmbeddings } from '@langchain/openai'
 import { MemoryVectorStore } from 'langchain/vectorstores/memory'
 import { SupabaseVectorStore } from '@langchain/community/vectorstores/supabase'
 import { createClient } from '@supabase/supabase-js'
-import type { Document } from '@langchain/core/documents'
+import  { Document } from '@langchain/core/documents'
 import { VectorStore } from '@langchain/core/vectorstores';
 
-class SuperbaseVectorStore  {
+export interface CodeChunk {
+  filePath: string;
+  language: string;
+  type: string;
+  name: string;
+  content: string;
+  startLine: number;
+  endLine: number;
+  metadata: {
+    imports?: string[];
+    exports?: string[];
+    dependencies?: string[];
+    [key: string]: any;
+  };
+}
+
+export class CodeVectorStore  {
   private config: {
     type: 'supabase' | 'memory' | 'faiss'
     openAIApiKey?: string
@@ -45,7 +61,7 @@ class SuperbaseVectorStore  {
     // Initialize embeddings
     this.embeddings = new OpenAIEmbeddings({
       openAIApiKey: config.openAIApiKey || process.env.OPENAI_API_KEY
-    });
+    }); 
   }
 
 
@@ -55,7 +71,7 @@ class SuperbaseVectorStore  {
    * @param documents List of documents to index
    * @returns The initialized vector store
    */
-  async indexDocuments(documents: Document[]): Promise<VectorStore> {
+  public async indexDocuments(documents: Document[]): Promise<VectorStore> {
     try {
       switch (this.config.type) {
         case 'supabase':
@@ -104,6 +120,22 @@ class SuperbaseVectorStore  {
     return this.vectorStore;
   }
 
+  public createDocumentsFromChunks(chunks: CodeChunk[]): Document[] {
+    return chunks.map((chunk) => {
+      return new Document({
+        pageContent: chunk.content,
+        metadata: {
+          filePath: chunk.filePath,
+          language: chunk.language,
+          type: chunk.type,
+          name: chunk.name,
+          startLine: chunk.startLine,
+          endLine: chunk.endLine,
+          ...chunk.metadata
+        }
+      });
+    });
+  }
 
    /**
    * Index documents in FAISS
@@ -149,7 +181,7 @@ class SuperbaseVectorStore  {
         );
         
         return this.vectorStore;
-      }
+    }
 
 
        /**
@@ -160,9 +192,10 @@ class SuperbaseVectorStore  {
    * @returns List of document results with similarity scores
    */
   async search(query: string, k: number = 5): Promise<Array<Document>> {
-    if (!this.vectorStore) {
-      throw new Error('Vector store not initialized. Call indexDocuments first.');
-    }
+    // if (!this.vectorStore) {
+    //   throw new Error('Vector store not initialized. Call indexDocuments first.');
+    // }
+    await this.loadFromSupabase();
     
     return await this.vectorStore.similaritySearch(query, k);
   }
@@ -222,6 +255,28 @@ class SuperbaseVectorStore  {
     
     return this.vectorStore;
     */
+  }
+
+  private async loadFromSupabase(): Promise<VectorStore> {
+    if (!this.config.supabase?.url || !this.config.supabase?.key) {
+      throw new Error('Supabase URL or key missing');
+    }
+  
+    const client = createClient(
+      this.config.supabase.url,
+      this.config.supabase.key
+    );
+  
+    this.vectorStore = await SupabaseVectorStore.fromExistingIndex(
+      this.embeddings,
+      {
+        client,
+        tableName: this.config.supabase.tableName,
+        queryName: this.config.supabase.queryName || 'match_documents'
+      }
+    );
+  
+    return this.vectorStore;
   }
 
  

@@ -37,7 +37,7 @@ export class Logger {
         const convertedData = this.deepConvertToObject(data)
     
         fs.writeFileSync(outputFile, JSON.stringify(convertedData, null, 2), 'utf8')
-        console.log(`Results written to ${outputFile}`)
+       // console.log(`Results written to ${outputFile}`)
       }
 
       public writeApendResults(data: any, key?: string): void {
@@ -48,7 +48,7 @@ export class Logger {
         const convertedData = this.deepConvertToObject(data)
     
         fs.appendFileSync(outputFile, JSON.stringify(convertedData, null, 2) + ',\n', 'utf8');
-        console.log(`Results written to ${outputFile}`)
+       // console.log(`Results written to ${outputFile}`)
       }
 }
 

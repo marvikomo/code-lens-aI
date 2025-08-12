@@ -23,7 +23,7 @@ async function main() {
     
     // Initialize and run analyzer
     const analyzer = new CodeAnalyzer(neo4jClient, languageRegistry);
-    const directoryToAnalyze = '/Users/ikponmwosaomorisiagbon/MySites/code-lens-aI/test-dir/export';
+    const directoryToAnalyze = '/Users/ikponmwosaomorisiagbon/MySites/code-lens-aI/test-dir/test-one';
     
     await analyzer.analyze(directoryToAnalyze, {
         ignoreDirs: ['node_modules', '.git'],

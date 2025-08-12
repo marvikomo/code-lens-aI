@@ -5,6 +5,8 @@ import { Neo4jClient } from '../db/neo4j-client';
 import { DbSchema } from '../db/schema';
 import { logger } from '../logger';
 import { TreeSitterUtil } from '../util/tree-sitter-util';
+import { CodeVectorStore } from '../vector-store';
+import { Graph } from 'graphlib';
 
 interface CallInfo {
     id: string;
@@ -23,8 +25,8 @@ export class CallExtractor extends Extractor {
     // Cache for function identifications to avoid repeated DB lookups
     private functionCache: Map<string, { id: string; name: string }> = new Map();
     
-    constructor(dbClient: Neo4jClient, treeSitterUtil: TreeSitterUtil) {
-      super(dbClient, treeSitterUtil);
+      constructor(dbClient: Neo4jClient, treeSitterUtil: TreeSitterUtil, vectorStore: CodeVectorStore, graph: Graph) {
+      super(dbClient, treeSitterUtil, vectorStore, graph);
     }
     
     /**

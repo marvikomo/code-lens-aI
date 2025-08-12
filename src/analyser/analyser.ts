@@ -29,7 +29,9 @@ import { ExportExtractor } from '../extractor/export-extractor';
 import { CallExtractor } from '../extractor/call-extractor';
 import { VariableExtractor } from '../extractor/variable-extractor';
 import { TreeSitterUtil } from '../util/tree-sitter-util';
+import { Graph } from 'graphlib';
 
+import { CodeVectorStore } from '../vector-store';
 
 
 
@@ -39,6 +41,7 @@ export class CodeAnalyzer {
     private edges: Map<string, CodeEdge>;
     private files: Map<string, FileInfo>;
     private parsedFiles: Map<string, ParsedFile>;
+    private graph: Graph
     private functionExtractor: Extractor;
     private classExtractor: Extractor;
     private importExtractor: Extractor;
@@ -52,12 +55,17 @@ export class CodeAnalyzer {
     private registry: LanguageRegistry;
     private treeSitterUtil: TreeSitterUtil;
 
+    private vectorStore: CodeVectorStore;
+
     constructor( dbClient: Neo4jClient,
          languageRegistry: LanguageRegistry) {
+
 
         this.jsParser.setLanguage(JavaScript as TreeSitterLanguage);
 
         this.treeSitterUtil = new TreeSitterUtil();
+
+        this.graph = new Graph();
 
         this.registry = languageRegistry;
         this.registry.register('javascript', {
@@ -73,13 +81,25 @@ export class CodeAnalyzer {
             }
         });
 
-        this.functionExtractor = new FunctionExtractor(dbClient, this.treeSitterUtil);
-        this.classExtractor = new ClassExtractor(dbClient, this.treeSitterUtil);
-        this.importExtractor = new ImportExtractor(dbClient, this.treeSitterUtil);
-        this.exportExtractor = new ExportExtractor(dbClient, this.treeSitterUtil);
-        this.classExtractor = new ClassExtractor(dbClient, this.treeSitterUtil);
-        this.callExtractor = new CallExtractor(dbClient, this.treeSitterUtil);
-        this.variableExtractor = new VariableExtractor(dbClient, this.treeSitterUtil);
+        this.vectorStore = new CodeVectorStore({
+            type: 'supabase',
+            openAIApiKey: process.env.OPENAI_API_KEY,
+            supabase: {
+                url: process.env.SUPABASE_URL,
+                key: process.env.SUPABASE_KEY,
+                tableName: 'codes',
+                queryName: 'code_match'
+              }
+           
+        });
+
+        this.functionExtractor = new FunctionExtractor(dbClient, this.treeSitterUtil, this.vectorStore, this.graph);
+        this.classExtractor = new ClassExtractor(dbClient, this.treeSitterUtil, this.vectorStore, this.graph);
+        this.importExtractor = new ImportExtractor(dbClient, this.treeSitterUtil, this.vectorStore, this.graph);
+        this.exportExtractor = new ExportExtractor(dbClient, this.treeSitterUtil, this.vectorStore, this.graph);
+        this.classExtractor = new ClassExtractor(dbClient, this.treeSitterUtil, this.vectorStore, this.graph);
+        this.callExtractor = new CallExtractor(dbClient, this.treeSitterUtil, this.vectorStore, this.graph);
+        this.variableExtractor = new VariableExtractor(dbClient, this.treeSitterUtil, this.vectorStore, this.graph);
         
         this.parser = new TreeSitterParser(this.registry);
         this.nodes = new Map<string, CodeNode>();
@@ -96,8 +116,7 @@ export class CodeAnalyzer {
 
 
         const files = await this.collectFiles(directoryPath, options);
-
-        await this.performAnalysis(files);
+     await this.performAnalysis(files);
 
         // console.log('parsed files', this.parsedFiles)
 
@@ -162,9 +181,10 @@ export class CodeAnalyzer {
             let batchs = files.slice(i, i + batchSize);
             // Parse files
             
-
+        console.log("wow", batchs)
             // Analyze parsed files
             for (const filePath of batchs) {
+        
                 const { language, tree, content } = await this.parser.parseFile(filePath);
             
                     //const parsedFile = this.parsedFiles.get(filePath)!;
@@ -177,19 +197,19 @@ export class CodeAnalyzer {
                    const variableQuery = this.registry.get(language).queries.variables;
                    
 
-                    await this.importExtractor.extract(tree, content, filePath, importQuery, files);
+                    //await this.importExtractor.extract(tree, content, filePath, importQuery, files);
 
                     await this.functionExtractor.extract(tree, content, filePath, functionQuery);
 
                     await this.classExtractor.extract(tree, content, filePath, classQuery);
 
-                     await this.exportExtractor.extract(tree, content, filePath, exportQuery);
+                    // await this.exportExtractor.extract(tree, content, filePath, exportQuery);
 
-                     await this.variableExtractor.extract(tree, content, filePath, variableQuery);
+                    // await this.variableExtractor.extract(tree, content, filePath, variableQuery);
 
-                     await this.callExtractor.extract(tree, content, filePath, callQuery);
+                    // await this.callExtractor.extract(tree, content, filePath, callQuery);
 
-                     console.log("done")
+    
 
                     // Extract function declarations
                     // this.extractFunctions(parsedFile);
@@ -202,8 +222,8 @@ export class CodeAnalyzer {
 
         }
 
-        logger.writeResults(this.parsedFiles, "Log-after-perform-analysis");
-        logger.writeResults(this.edges, "Log-edges-after-perform-analysis");
+        //logger.writeResults(this.parsedFiles, "Log-after-perform-analysis");
+        //logger.writeResults(this.edges, "Log-edges-after-perform-analysis");
 
 
 
@@ -615,7 +635,7 @@ export class CodeAnalyzer {
 
 
             // Log processed calls
-            console.log(`Extracted ${parsedFile.calls.length} function calls from ${filePath}`);
+           // console.log(`Extracted ${parsedFile.calls.length} function calls from ${filePath}`);
         } catch (error) {
             console.log("error", error);
             console.error(`Error extracting calls from ${filePath}:`, (error as Error).message);

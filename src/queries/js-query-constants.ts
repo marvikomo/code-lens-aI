@@ -1,79 +1,77 @@
-export const FunctionQuery = `
-;; Named function declarations
-(function_declaration
-  name: (identifier) @name) @function
+export const FunctionQuery = `  
+;; Function declarations and expressions  
+[  
+  ;; Named function declarations  
+  (function_declaration  
+    name: (identifier) @name)   
+  ;; Generator function declarations    
+  (generator_function_declaration  
+    name: (identifier) @name)  
+] @function  
 
-;; Exported named functions
-(export_statement
-  (function_declaration
-    name: (identifier) @name)) @function
-
-;; Arrow functions assigned to variables
-(variable_declarator
-  name: (identifier) @name
-  value: (arrow_function)) @function
-
-;; Exported default anonymous function declaration
-(export_statement
-  (function_declaration) @function) @default_anon
-
-;; Exported default anonymous function expression
-(export_statement
-  (function_expression) @function)
-
-;; Exported default arrow function
-(export_statement
-  (arrow_function) @function)
-
-;; Function expressions assigned to variables
-(variable_declarator
-  name: (identifier) @name
-  value: (function_expression)) @function
-
-;; Arrow functions inside object literals
-(pair
-  key: (property_identifier) @name
-  value: (arrow_function)) @function
-
-;; IIFE (Immediately Invoked Function Expression)
-(call_expression
-  function: (parenthesized_expression
-    (function_expression
-      name: (identifier) @name)) @function) @iife
-
-;; Class declarations
-(class_declaration
-  name: (identifier) @name) @class
-
-;; Class expressions
-(variable_declarator
-  name: (identifier) @name
-  value: (class)) @class
-
-;; Method definitions
-(method_definition
-  name: (property_identifier) @name) @method
-
-;; Constructors
-(method_definition
-  name: (property_identifier) @name
-  (#eq? @name "constructor")) @constructor
-
-;; Object literal methods
-(pair
-  key: (property_identifier) @name
-  value: (function_expression)) @method
-
-;; Object method shorthand
-(method_definition
-  name: (property_identifier) @name) @method
-
-;; Callback arrow functions
-(call_expression
-  arguments: (arguments 
-    (arrow_function) @function))
-
+;; Object methods - both property functions and method definitions  
+[  
+  ;; Object property functions (fn: function() {} or fn: () => {})  
+  (pair  
+    key: (property_identifier) @name  
+    value: [(function_expression) (arrow_function)])  
+  ;; ES6 method shorthand (methodName() {})  
+  (method_definition  
+    name: (property_identifier) @name)  
+] @method
+  
+;; Variable-assigned functions  
+[  
+  ;; Arrow functions assigned to variables  
+  (variable_declarator  
+    name: (identifier) @name  
+    value: (arrow_function))  
+  ;; Function expressions assigned to variables    
+  (variable_declarator  
+    name: (identifier) @name  
+    value: (function_expression))  
+] @function  
+   
+  
+;; Special function patterns  
+(call_expression    
+  arguments: (arguments    
+    . (function_expression))) @anonymous_callback  
+  
+(call_expression    
+  function: (parenthesized_expression    
+    (function_expression))) @iife  
 `;
+
+
+export const ClassQuery = `  
+;; All class declarations and expressions  
+[    
+  (class_declaration name: (identifier) @name)    
+  (class name: (identifier) @name)      
+] @definition.class  
+  
+;; Class expressions assigned to variables  
+(variable_declarator  
+  name: (identifier) @name  
+  value: (class  
+    name: (identifier)? @inner_name)) @class_assignment  
+  
+;; Class expressions in export statements  
+(export_statement  
+  declaration: (class_declaration  
+    name: (identifier) @name)) @exported_class  
+  
+;; Class expressions as function return values  
+(return_statement  
+  (class  
+    name: (identifier)? @name)) @returned_class  
+`;
+
+
+
+
+
 
 export const VariableQuery = `
 ;; Variable with initial value 
@@ -235,36 +233,6 @@ export const VariableQuery = `
   left: (identifier) @name) @for_in_var
 
 `;
-
-export const ClassQuery = `
-;; Class declarations
-(class_declaration
-  name: (identifier) @name) @class
-
-;; Class expressions
-(variable_declarator
-  name: (identifier) @name
-  value: (class)) @class_expr
-
-;; Method definitions
-(method_definition
-  name: (property_identifier) @name) @method
-
-;; Constructor method
-(method_definition
-  name: (property_identifier) @name
-  (#eq? @name "constructor")) @constructor
-
-;; capture the class _node_ when it’s on the RHS of a var or export
-(variable_declarator
-  name: (identifier) @name
-  value: (class
-    (identifier)?     ; optional inner name
-    body: (class_body) @body) @class_expr)
-
-  
-`;
-
 
 export const ImportQuery =`
 ;; Default imports

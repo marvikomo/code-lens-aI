@@ -47,5 +47,9 @@ export enum NodeType {
     FunctionExpression = 'function_expression',     // Function expressions (function() {})
     Unknown = 'unknown',  
     NewExpression = 'new_expression',
-    Class = 'class'                         // Placeholder for unknown node types
+    Class = 'class',                         // Placeholder for unknown node types
+    IIFE = 'iife',
+    InterfaceDeclaration = 'interface_declaration',
+    NamespaceDeclaration = 'namespace_declaration',
+    ObjectExpression = 'object_expression',
   }

@@ -2,10 +2,12 @@ import Parser from 'tree-sitter'
 import { Neo4jClient } from '../db/neo4j-client'
 import { DbUtils } from '../util/db-utils'
 import { TreeSitterUtil } from '../util/tree-sitter-util'
+import { CodeVectorStore } from '../vector-store'
+import { Graph } from 'graphlib';
 
 export abstract class Extractor {
   protected dbUtils: DbUtils
-  constructor(protected dbClient: Neo4jClient, protected treeSitterUtils:TreeSitterUtil) {
+  constructor(protected dbClient: Neo4jClient, protected treeSitterUtils:TreeSitterUtil, protected vectorStore: CodeVectorStore, protected graph: Graph) {
     this.dbUtils = new DbUtils(dbClient)
   }
 
@@ -27,11 +29,13 @@ export abstract class Extractor {
     type: string,
     name: string,
     filePath: string,
-    line: number,
-    column: number,
+    startRow: number,
+    endRow: number,
+    startColumn: number = 0,
+    endColumn: number = 0,
   ): string {
     // Create an ID that's unique and deterministic
-    return `${type}:${filePath}:${name}:${line}:${column}`
+    return `${type}:${filePath}:${name}:${startRow}:${endRow}:${startColumn}:${endColumn}`
   }
   /**
    * Create a module node if it doesn't exist

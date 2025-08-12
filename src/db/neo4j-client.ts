@@ -114,6 +114,7 @@ export class Neo4jClient {
     return this.driver;
   }
 
+
   /**
  * Get the graph schema including labels, relationships, properties, constraints, and indexes
  */
@@ -123,6 +124,7 @@ async getSchema(): Promise<{
   propertyKeys: string[];
   constraints: any[];
   indexes: any[];
+  relationshipPatterns: string[];
 }> {
   const session = this.getSession();
   
@@ -160,12 +162,34 @@ async getSchema(): Promise<{
       state: record.get('state')
     }));
     
+    // Get relationship patterns from actual data
+    const relationshipPatternsResult = await session.run(`
+      MATCH (n)-[r]->(m)
+      RETURN DISTINCT 
+        labels(n) as sourceLabels, 
+        type(r) as relationshipType, 
+        labels(m) as targetLabels
+      ORDER BY sourceLabels, relationshipType, targetLabels
+    `);
+    
+    const relationshipPatterns = relationshipPatternsResult.records.map(record => {
+      const sourceLabels = record.get('sourceLabels');
+      const relationshipType = record.get('relationshipType');
+      const targetLabels = record.get('targetLabels');
+      
+      const source = sourceLabels.length > 0 ? `:${sourceLabels.join(':')}` : '';
+      const target = targetLabels.length > 0 ? `:${targetLabels.join(':')}` : '';
+      
+      return `(${source})-[:${relationshipType}]->(${target})`;
+    });
+
     return {
       labels,
       relationshipTypes,
       propertyKeys,
       constraints,
-      indexes
+      indexes,
+      relationshipPatterns
     };
   } finally {
     session.close();
