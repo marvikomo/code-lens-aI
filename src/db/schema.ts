@@ -1,3 +1,5 @@
+import { RelationshipType } from '../enum/RelationshipType';
+
 export const DbSchema = {
     constraints: [
       'CREATE CONSTRAINT module_id IF NOT EXISTS FOR (m:Module) REQUIRE m.id IS UNIQUE',
@@ -20,26 +22,26 @@ export const DbSchema = {
       IMPORT: 'Import',
       EXPORT: 'Export'
     },
-    // Defined relationship types
+    // Defined relationship types - now using the RelationshipType enum
     relationships: {
-      DEFINED_IN: 'DEFINED_IN',
-      CALLS: 'CALLS',
-      EXTENDS: 'EXTENDS',
-      IMPLEMENTS: 'IMPLEMENTS',
-      HAS_METHOD: 'HAS_METHOD',
-      HAS_PROPERTY: 'HAS_PROPERTY',
-      IMPORTS: 'IMPORTS',
-      EXPORTS: 'EXPORTS',
-      USES: 'USES',
-      MODIFIES: 'MODIFIES',
-      USED_IN: 'USED_IN',
-      GLOBAL_IN: 'GLOBAL_IN',
-      LOCAL_TO: 'LOCAL_TO',
-      LIFETIME_OF: 'LIFETIME_OF',
-      REFERS_TO: 'REFERS_TO',
-      DEPENDS_ON: 'DEPENDS_ON',
-      INITIALIZED_WITH: 'INITIALIZED_WITH',
-      GLOBAL_TO: 'GLOBAL_TO'
+      DEFINED_IN: RelationshipType.DEFINED_IN,
+      CALLS: RelationshipType.CALLS,
+      EXTENDS: RelationshipType.EXTENDS,
+      IMPLEMENTS: RelationshipType.IMPLEMENTS,
+      HAS_METHOD: RelationshipType.HAS_METHOD,
+      HAS_PROPERTY: RelationshipType.HAS_PROPERTY,
+      IMPORTS: RelationshipType.IMPORTS,
+      EXPORTS: RelationshipType.EXPORTS,
+      USES: RelationshipType.USES,
+      MODIFIES: RelationshipType.MODIFIES,
+      USED_IN: RelationshipType.USED_IN,
+      GLOBAL_IN: RelationshipType.GLOBAL_IN,
+      LOCAL_TO: RelationshipType.LOCAL_TO,
+      LIFETIME_OF: RelationshipType.LIFETIME_OF,
+      REFERS_TO: RelationshipType.REFERS_TO,
+      DEPENDS_ON: RelationshipType.DEPENDS_ON,
+      INITIALIZED_WITH: RelationshipType.INITIALIZED_WITH,
+      GLOBAL_TO: RelationshipType.GLOBAL_TO
     }
   };
   

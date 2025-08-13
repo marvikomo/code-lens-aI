@@ -32,11 +32,12 @@ export class ClassExtractor extends Extractor {
         )
 
        const classCapture = match.captures.find(
-          (c) => c.name === 'definition.class' || c.name === 'class_assignment' 
-          || c.name === 'exported_class' || c.name === 'returned_class'
-          || c.name === 'class'
+          (c) => c.name === 'class'
         )
         const nameCapture = match.captures.find((c) => c.name === 'name')
+
+
+          const captureInheritance = match.captures.find((c) => c.name === "superclass");
 
         if(!classCapture) continue;
 
@@ -44,10 +45,11 @@ export class ClassExtractor extends Extractor {
  
 
         console.log("classCapture", classCapture.node.text)
+        console.log("class inheritance", captureInheritance?.node.text)
 
         const classMethods = this.treeSitterUtils.getAllClassMembers(classCapture.node)
         const classFields = [];
-        console.log("class method", classMethods)
+      //  console.log("class method", classMethods)
 
         this.graph.setNode()
         classMethods.forEach(e => {

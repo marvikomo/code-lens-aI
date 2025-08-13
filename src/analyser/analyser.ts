@@ -81,17 +81,17 @@ export class CodeAnalyzer {
             }
         });
 
-        this.vectorStore = new CodeVectorStore({
-            type: 'supabase',
-            openAIApiKey: process.env.OPENAI_API_KEY,
-            supabase: {
-                url: process.env.SUPABASE_URL,
-                key: process.env.SUPABASE_KEY,
-                tableName: 'codes',
-                queryName: 'code_match'
-              }
+        // this.vectorStore = new CodeVectorStore({
+        //     type: 'supabase',
+        //     openAIApiKey: process.env.OPENAI_API_KEY,
+        //     supabase: {
+        //         url: process.env.SUPABASE_URL,
+        //         key: process.env.SUPABASE_KEY,
+        //         tableName: 'codes',
+        //         queryName: 'code_match'
+        //       }
            
-        });
+        // });
 
         this.functionExtractor = new FunctionExtractor(dbClient, this.treeSitterUtil, this.vectorStore, this.graph);
         this.classExtractor = new ClassExtractor(dbClient, this.treeSitterUtil, this.vectorStore, this.graph);
@@ -199,9 +199,9 @@ export class CodeAnalyzer {
 
                     //await this.importExtractor.extract(tree, content, filePath, importQuery, files);
 
-                    await this.functionExtractor.extract(tree, content, filePath, functionQuery);
+                   // await this.functionExtractor.extract(tree, content, filePath, functionQuery);
 
-                    await this.classExtractor.extract(tree, content, filePath, classQuery);
+                   await this.classExtractor.extract(tree, content, filePath, classQuery);
 
                     // await this.exportExtractor.extract(tree, content, filePath, exportQuery);
 

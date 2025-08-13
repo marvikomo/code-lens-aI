@@ -1,77 +1,87 @@
 export const FunctionQuery = `  
-;; Function declarations and expressions  
-[  
-  ;; Named function declarations  
-  (function_declaration  
-    name: (identifier) @name)   
-  ;; Generator function declarations    
-  (generator_function_declaration  
-    name: (identifier) @name)  
-] @function  
-
-;; Object methods - both property functions and method definitions  
-[  
-  ;; Object property functions (fn: function() {} or fn: () => {})  
-  (pair  
-    key: (property_identifier) @name  
+[    ;; Function declarations and expressions    
+    (function_declaration name: (identifier) @name)   
+     (generator_function_declaration name: (identifier) @name)      
+       ;; Variable-assigned functions (const/let/var declarations)   
+        (variable_declarator       
+        name: (identifier) @name      
+         value: [(arrow_function) (function_expression)])  
+      
+  ;; Assignment expressions with functions (no declaration keyword)  
+  (assignment_expression  
+    left: (identifier) @name  
+    right: [(arrow_function) (function_expression)])  
+      
+  ;; Class field definitions with functions  
+  (field_definition  
+    property: [(property_identifier) (private_property_identifier)] @name  
+    value: [(arrow_function) (function_expression)])  
+      
+  ;; Object methods and property functions  
+  (pair   
+    key: (property_identifier) @name   
     value: [(function_expression) (arrow_function)])  
-  ;; ES6 method shorthand (methodName() {})  
-  (method_definition  
-    name: (property_identifier) @name)  
-] @method
-  
-;; Variable-assigned functions  
-[  
-  ;; Arrow functions assigned to variables  
-  (variable_declarator  
-    name: (identifier) @name  
-    value: (arrow_function))  
-  ;; Function expressions assigned to variables    
-  (variable_declarator  
-    name: (identifier) @name  
-    value: (function_expression))  
-] @function  
-   
-  
-;; Special function patterns  
-(call_expression    
-  arguments: (arguments    
-    . (function_expression))) @anonymous_callback  
-  
-(call_expression    
-  function: (parenthesized_expression    
-    (function_expression))) @iife  
-`;
-
+  (method_definition   
+    name: [(property_identifier) (private_property_identifier)] @name)  
+] @function
+`
 
 export const ClassQuery = `  
-;; All class declarations and expressions  
-[    
-  (class_declaration name: (identifier) @name)    
-  (class name: (identifier) @name)      
-] @definition.class  
+[  
+  ;; Basic class declarations  
+  (class_declaration  
+    name: (identifier) @name)  
+
+      (class name: (identifier) @name)  
   
-;; Class expressions assigned to variables  
-(variable_declarator  
+    (class_declaration  
+  name: (identifier) @name  
+  (class_heritage (identifier) @superclass)?)
+  
+  (variable_declarator  
   name: (identifier) @name  
   value: (class  
-    name: (identifier)? @inner_name)) @class_assignment  
-  
-;; Class expressions in export statements  
-(export_statement  
+    name: (identifier)? @inner_name))
+
+    (export_statement  
   declaration: (class_declaration  
-    name: (identifier) @name)) @exported_class  
-  
+    name: (identifier) @name))
+
 ;; Class expressions as function return values  
 (return_statement  
   (class  
-    name: (identifier)? @name)) @returned_class  
-`;
+    name: (identifier)? @name))
+      
+  ;; Export class declarations  
+  (export_statement  
+    declaration: (class_declaration  
+      name: (identifier) @name))  
+] @class
+`
 
-
-
-
-
+// export const ClassQuery = `  
+// ;; All class declarations and expressions  
+// [    
+//   (class_declaration name: (identifier) @name)    
+//   (class name: (identifier) @name)      
+// ] @definition.class  
+  
+// ;; Class expressions assigned to variables  
+// (variable_declarator  
+//   name: (identifier) @name  
+//   value: (class  
+//     name: (identifier)? @inner_name)) @class_assignment  
+  
+// ;; Class expressions in export statements  
+// (export_statement  
+//   declaration: (class_declaration  
+//     name: (identifier) @name)) @exported_class  
+  
+// ;; Class expressions as function return values  
+// (return_statement  
+//   (class  
+//     name: (identifier)? @name)) @returned_class  
+// `
 
 export const VariableQuery = `
 ;; Variable with initial value 
@@ -232,9 +242,9 @@ export const VariableQuery = `
 (for_in_statement 
   left: (identifier) @name) @for_in_var
 
-`;
+`
 
-export const ImportQuery =`
+export const ImportQuery = `
 ;; Default imports
 (import_statement
   (import_clause
@@ -265,7 +275,7 @@ export const ImportQuery =`
 (call_expression
   function: (identifier) @name
   arguments: (arguments (string) @source)) @require_statement
-`;
+`
 
 export const ExportQuery = `;; Export query for JavaScript/TypeScript
 
@@ -324,7 +334,7 @@ export const ExportQuery = `;; Export query for JavaScript/TypeScript
 ) @exported_variable
 `
 
-export const CallQuery  = `
+export const CallQuery = `
 ;; All function calls with their context in one comprehensive query
 ;; Direct function calls
 (call_expression
@@ -357,4 +367,4 @@ export const CallQuery  = `
 ;; Call expressions in return statements
 (return_statement
   (call_expression) @call_in_return) @return
-`;
+`

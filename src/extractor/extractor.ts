@@ -27,7 +27,7 @@ export abstract class Extractor {
    */
   protected generateNodeId(
     type: string,
-    name: string,
+    name: string | null,
     filePath: string,
     startRow: number,
     endRow: number,
@@ -35,7 +35,7 @@ export abstract class Extractor {
     endColumn: number = 0,
   ): string {
     // Create an ID that's unique and deterministic
-    return `${type}:${filePath}:${name}:${startRow}:${endRow}:${startColumn}:${endColumn}`
+    return `${type}:${filePath}:${name ? name: ""}:${startRow}:${endRow}:${startColumn}:${endColumn}`
   }
   /**
    * Create a module node if it doesn't exist
