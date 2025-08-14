@@ -5,11 +5,17 @@ import { DbSchema } from '../db/schema'
 import { TreeSitterUtil } from '../util/tree-sitter-util'
 import { ClassNodeService } from '../services/class-node-service'
 import { CodeVectorStore } from '../vector-store'
-import { Graph } from 'graphlib';
+import { Graph } from 'graphlib'
+import { RelationshipType } from '../enum/RelationshipType'
 
 export class ClassExtractor extends Extractor {
   private classNodeService: ClassNodeService
-   constructor(dbClient: Neo4jClient, treeSitterUtil: TreeSitterUtil, vectorStore: CodeVectorStore, graph: Graph) {
+  constructor(
+    dbClient: Neo4jClient,
+    treeSitterUtil: TreeSitterUtil,
+    vectorStore: CodeVectorStore,
+    graph: Graph,
+  ) {
     super(dbClient, treeSitterUtil, vectorStore, graph)
     this.classNodeService = new ClassNodeService(dbClient)
   }
@@ -24,130 +30,119 @@ export class ClassExtractor extends Extractor {
   ): Promise<void> {
     // Ensure module node exists
     await this.ensureModuleNode(filePath)
+    const moduleId = `mod:${filePath}`
 
     const matches = query.matches(tree.rootNode)
     for (const match of matches) {
-       const bodyCapture = match.captures.find(
-          (c) => c.name === 'body'
-        )
+      const bodyCapture = match.captures.find((c) => c.name === 'body')
 
-       const classCapture = match.captures.find(
-          (c) => c.name === 'class'
-        )
-        const nameCapture = match.captures.find((c) => c.name === 'name')
+      const classCapture = match.captures.find(
+        (c) =>
+          c.name === 'class',
+      )
+      const nameCapture = match.captures.find((c) => c.name === 'name')
 
+      if (!classCapture) continue
 
-          const captureInheritance = match.captures.find((c) => c.name === "superclass");
+      // const classId = this.generateNodeId("class", filePath, )
 
-        if(!classCapture) continue;
+      function extractClassSignature(classCode: string): string {
+        const lines = classCode.split('\n')
+        let classDeclarationLines: string[] = []
+        let braceFound = false
+        let insideClass = false
 
-       // const classId = this.generateNodeId("class", filePath, )
- 
+        for (const line of lines) {
+          const trimmedLine = line.trim()
 
-        console.log("classCapture", classCapture.node.text)
-        console.log("class inheritance", captureInheritance?.node.text)
-
-        const classMethods = this.treeSitterUtils.getAllClassMembers(classCapture.node)
-        const classFields = [];
-      //  console.log("class method", classMethods)
-
-        this.graph.setNode()
-        classMethods.forEach(e => {
-          //TODO Check the function node if the id exists else index it
-          if(e.memberType === 'method'){
-            const name = this.treeSitterUtils.extractFunctionName(e.node)
-          const fnId = this.generateNodeId("function", name, 
-            filePath, 
-            e.node.startPosition.row + 1, 
-            e.node.endPosition.row + 1,
-            e.node.startPosition.column + 1,
-            e.node.endPosition.column + 1
-          ) 
-
-          console.log("fn-ids", fnId)
-
-          if(!this.graph.hasNode(fnId)) {
-            const fnCalls = this.treeSitterUtils.findFunctionCalls(e.node)
-             this.graph.setNode(fnId, {
-              type: "function",
-              name, 
-              moduleDefinedIn: filePath, 
-              rowStart: e.node.startPosition.row + 1,
-              rowEnd: e.node.endPosition.row + 1,
-              columnStart: e.node.startPosition.column + 1,
-              columnEnd: e.node.endPosition.column + 1,
-              signature: e.signature,
-              scopeDefinedIn: `Class ${nameCapture.node.text}`,
-              code: e.node.text,
-              calls: fnCalls
-             })
+          // Skip empty lines and comments before class declaration
+          if (
+            !insideClass &&
+            (trimmedLine === '' || trimmedLine.startsWith('//'))
+          ) {
+            continue
           }
 
-          }else if (e.memberType === 'field') {
-          //   const varId = this.generateNodeId("function", name, 
-          //   filePath, 
-          //   e.node.startPosition.row + 1, 
-          //   e.node.endPosition.row + 1,
-          //   e.node.startPosition.column + 1,
-          //   e.node.endPosition.column + 1
-          // ) 
-          }else if(e.memberType === 'static_block') {
-
+          // Start collecting when we find class keyword
+          if (
+            !insideClass &&
+            (trimmedLine.includes('class ') || line.includes('class '))
+          ) {
+            insideClass = true
           }
-          //index class
 
-          //index class fields
-           
-          // this.graph.setNode("function", {
+          if (insideClass) {
+            classDeclarationLines.push(line)
 
-          // })
+            // Che
+            if (line.includes('{')) {
+              braceFound = true
+              break
+            }
+          }
+        }
 
-        })
-       
-    }
-   
+        if (!braceFound) {
+          return classCode // Return original if no proper class structure found
+        }
 
-    console.log(`Extracted ${matches.length} classes from ${filePath}`)
-  }
+        // Join the declaration lines and clean up
+        let declaration = classDeclarationLines.join('\n')
 
-  /**
-   * Process a batch of class matches
-   */
-  private async processClassBatch(
-    matches: Parser.QueryMatch[],
-    content: string,
-    filePath: string,
-  ): Promise<void> {
+        // Remove everything after and including the opening brace
+        const braceIndex = declaration.indexOf('{')
+        if (braceIndex !== -1) {
+          declaration = declaration.substring(0, braceIndex).trim()
+        }
 
-      const classIndexes = []
-      for (const match of matches) {
-        // Get class node and name capture
-        const classCapture = match.captures.find(
-          (c) => c.name === 'class' || c.name === 'class_expr',
-        )
-        const nameCapture = match.captures.find((c) => c.name === 'name')
-        const constructorCapture = match.captures.find(
-          (c) => c.name === 'constructor',
-        )
-
-        if (!classCapture || !nameCapture) continue
-
-        const classNode = classCapture.node
-
-        // Get class details
-        const className = nameCapture.node.text
-
-        classIndexes.push({
-          classNode,
-          className,
-          filePath,
-        })
-
+        return `${declaration} { }`
       }
 
-      await this.classNodeService.indexClassesInBatch(classIndexes, content)
-    
-  }
+      const classSignature = extractClassSignature(classCapture.node.text)
 
- 
+      console.log('classCapture', classCapture.node.text)
+      console.log('NAME', nameCapture?.node.text)
+
+      console.log("class signature", classSignature)
+
+      const classMembers = this.treeSitterUtils.getAllClassMembers(
+        classCapture.node,
+      )
+
+      const classId = this.generateNodeId("class", null, filePath , classCapture.node.startPosition.row + 1, classCapture.node.endPosition.row + 1, classCapture.node.startPosition.column + 1, classCapture.node.endPosition.column + 1)
+
+      const _classMembers = classMembers.map((e: any) => {
+        return {
+          name: e.name,
+          type: e.memberType,
+          signature: e.signature,
+          rowStart: e.node.startPosition.row + 1,
+          rowEnd: e.node.endPosition.row + 1,
+          columnStart: e.node.startPosition.column + 1,
+          columnEnd: e.node.endPosition.column + 1,
+
+        }
+      })
+
+      //console.log('class members', _classMembers)
+
+      this.graph.setNode(classId, {
+        type: 'class',
+        name: nameCapture.node.text,
+        moduleDefinedIn: filePath,
+        rowStart: classCapture.node.startPosition.row + 1,
+        rowEnd: classCapture.node.endPosition.row + 1,
+        columnStart: classCapture.node.startPosition.column + 1,
+        columnEnd: classCapture.node.endPosition.column + 1,
+        signature: classSignature,
+        methods: _classMembers
+      })
+
+       this.graph.setEdge(classId, moduleId, { type: RelationshipType.DEFINED_IN })
+    }
+
+    console.log(`Extracted ${matches.length} classes from ${filePath}`)
+
+   
+  }
 }

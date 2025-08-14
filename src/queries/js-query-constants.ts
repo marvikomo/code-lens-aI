@@ -26,62 +26,32 @@ export const FunctionQuery = `
 ] @function
 `
 
+
 export const ClassQuery = `  
 [  
-  ;; Basic class declarations  
-  (class_declaration  
-    name: (identifier) @name)  
-
-      (class name: (identifier) @name)  
-  
-    (class_declaration  
-  name: (identifier) @name  
-  (class_heritage (identifier) @superclass)?)
-  
+  ;; Class declarations  
+  (class_declaration name: (identifier) @name)  
+    
+  ;; Variable-assigned classes (const/let/var declarations)  
   (variable_declarator  
-  name: (identifier) @name  
-  value: (class  
-    name: (identifier)? @inner_name))
-
-    (export_statement  
-  declaration: (class_declaration  
-    name: (identifier) @name))
-
-;; Class expressions as function return values  
-(return_statement  
-  (class  
-    name: (identifier)? @name))
+    name: (identifier) @name  
+    value: (class))  
       
-  ;; Export class declarations  
+  ;; Assignment expressions with classes (no declaration keyword)  
+  (assignment_expression  
+    left: (identifier) @name  
+    right: (class))  
+      
+  ;; Object property classes  
+  (pair  
+    key: (property_identifier) @name  
+    value: (class))  
+      
+  ;; Export statements with classes  
   (export_statement  
-    declaration: (class_declaration  
-      name: (identifier) @name))  
+    value: (class name: (identifier) @name))  
 ] @class
 `
-
-// export const ClassQuery = `  
-// ;; All class declarations and expressions  
-// [    
-//   (class_declaration name: (identifier) @name)    
-//   (class name: (identifier) @name)      
-// ] @definition.class  
-  
-// ;; Class expressions assigned to variables  
-// (variable_declarator  
-//   name: (identifier) @name  
-//   value: (class  
-//     name: (identifier)? @inner_name)) @class_assignment  
-  
-// ;; Class expressions in export statements  
-// (export_statement  
-//   declaration: (class_declaration  
-//     name: (identifier) @name)) @exported_class  
-  
-// ;; Class expressions as function return values  
-// (return_statement  
-//   (class  
-//     name: (identifier)? @name)) @returned_class  
-// `
 
 export const VariableQuery = `
 ;; Variable with initial value 
