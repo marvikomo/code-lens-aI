@@ -22,7 +22,6 @@ interface CallInfo {
   }
 
 export class CallExtractor extends Extractor {
-    // Cache for function identifications to avoid repeated DB lookups
     private functionCache: Map<string, { id: string; name: string }> = new Map();
     
       constructor(dbClient: Neo4jClient, treeSitterUtil: TreeSitterUtil, vectorStore: CodeVectorStore, graph: Graph) {
@@ -50,6 +49,13 @@ export class CallExtractor extends Extractor {
       // First pass: collect all call info without DB operations
       const callInfos: CallInfo[] = [];
       for (const match of matches) {
+       
+
+
+
+
+
+
         let callInfo: CallInfo | null = null;
         
         if (match.captures.some(c => c.name === 'call')) {

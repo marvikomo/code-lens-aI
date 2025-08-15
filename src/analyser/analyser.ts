@@ -173,17 +173,9 @@ export class CodeAnalyzer {
     private async performAnalysis(files: string[]): Promise<void> {
         console.log('Starting static AST analysis phase...', files);
 
-        // Process files in batches to avoid memory issues
-        const batchSize = 50;
-
-        for (let i = 0; i < files.length; i += batchSize) {
-
-            let batchs = files.slice(i, i + batchSize);
-            // Parse files
-            
-        console.log("wow", batchs)
+     
             // Analyze parsed files
-            for (const filePath of batchs) {
+            for (const filePath of files) {
         
                 const { language, tree, content } = await this.parser.parseFile(filePath);
             
@@ -229,7 +221,7 @@ export class CodeAnalyzer {
 
         //  logger.writeResults(this.nodes, "nodes");
 
-    }
+    
 
 
 

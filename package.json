@@ -34,7 +34,8 @@
     "resolve": "^1.22.10",
     "resolve-import": "^2.0.0",
     "tree-sitter": "^0.22.4",
-    "tree-sitter-javascript": "^0.23.1"
+    "tree-sitter-javascript": "^0.23.1",
+    "typescript-language-server": "^4.4.0"
   },
   "devDependencies": {
     "@types/dotenv": "^8.2.3",
