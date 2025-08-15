@@ -1,7 +1,7 @@
 {
   "name": "codelens-ai",
   "version": "1.0.0",
-  "description": "CodeLens AI - Intelligent code analysis using AST and AI",
+  "description": "AI-powered code analysis platform with Tree-sitter AST parsing, LSP integration, and Neo4j graph database for intelligent code understanding and relationship mapping",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
@@ -9,15 +9,65 @@
     "dev": "ts-node src/index.ts",
     "test": "jest",
     "test:watch": "jest --watch",
-    "test:simple": "ts-node src/index.ts"
+    "test:simple": "ts-node src/index.ts",
+    "analyze": "ts-node src/index.ts",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "neo4j:start": "docker-compose up -d neo4j",
+    "neo4j:stop": "docker-compose stop neo4j"
   },
   "keywords": [
-    "ast",
+    "ai",
+    "artificial-intelligence",
+    "machine-learning",
     "code-analysis",
-    "ai"
+    "static-analysis",
+    "ast-parsing",
+    "tree-sitter",
+    "neo4j",
+    "graph-database",
+    "knowledge-graph",
+    "language-server-protocol",
+    "code-intelligence",
+    "function-extraction",
+    "code-generation",
+    "refactoring",
+    "embeddings",
+    "vector-search",
+    "langchain",
+    "openai",
+    "code-quality",
+    "dependency-analysis",
+    "software-engineering",
+    "devtools"
   ],
-  "author": "",
+  "author": "CodeLens AI Contributors",
   "license": "MIT",
+  "homepage": "https://github.com/marvikomo/code-lens-aI#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/marvikomo/code-lens-aI.git"
+  },
+  "bugs": {
+    "url": "https://github.com/marvikomo/code-lens-aI/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "ai": {
+    "compatible": true,
+    "features": [
+      "function-extraction",
+      "relationship-mapping",
+      "graph-queries",
+      "semantic-search",
+      "call-analysis",
+      "dependency-tracking"
+    ],
+    "formats": ["neo4j", "graphql", "embeddings", "json"],
+    "languages": ["javascript", "typescript"],
+    "integrations": ["openai", "langchain", "supabase"]
+  },
   "dependencies": {
     "@langchain/community": "^0.3.43",
     "@langchain/core": "^0.3.56",
