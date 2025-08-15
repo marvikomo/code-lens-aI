@@ -57,7 +57,7 @@ interface CallHierarchyOutgoingCall {
   fromRanges: Range[];
 }
 
-export class LSPClient {
+export class TypeScriptLSPClient {
   private process: ChildProcess | null = null;
   private requestId = 1;
   private pendingRequests = new Map<number, { resolve: Function; reject: Function }>();
@@ -102,6 +102,7 @@ export class LSPClient {
   }
 
   private async initialize(): Promise<void> {
+    console.log("Root uri:", this.workspaceRoot ? `file://${path.resolve(this.workspaceRoot)}` : 'No workspace root');
     const initRequest: LSPRequest = {
       jsonrpc: '2.0',
       id: this.requestId++,

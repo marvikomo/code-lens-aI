@@ -1,704 +1,493 @@
+import Parser from 'tree-sitter'
+import { Extractor } from './extractor'
+import { Neo4jClient } from '../db/neo4j-client'
+import { DbSchema } from '../db/schema'
+import { logger } from '../logger'
+import { TreeSitterUtil } from '../util/tree-sitter-util'
+import { CodeVectorStore } from '../vector-store'
+import { Graph } from 'graphlib'
+import { RelationshipType } from '../enum/RelationshipType'
 
-import Parser from 'tree-sitter';
-import { Extractor } from './extractor';
-import { Neo4jClient } from '../db/neo4j-client';
-import { DbSchema } from '../db/schema';
-import { logger } from '../logger';
-import { TreeSitterUtil } from '../util/tree-sitter-util';
-import { CodeVectorStore } from '../vector-store';
-import { Graph } from 'graphlib';
+export class CallExtractor  {
 
-interface CallInfo {
-    id: string;
-    callNode: Parser.SyntaxNode;
-    callerInfo: { id: string; name: string } | null;
-    calleeName: string;
-    objectName?: string;      // For method calls
-    methodName?: string;      // For method calls
-    filePath: string;
-    argsCount: number;
-    isTopLevel: boolean;
-    callType: 'direct' | 'method' | 'nested' | 'iife' | 'toplevel';
+  private graph: Graph
+
+  constructor(
+    graph: Graph,
+  ) {
+   this.graph = graph
   }
 
-export class CallExtractor extends Extractor {
-    private functionCache: Map<string, { id: string; name: string }> = new Map();
-    
-      constructor(dbClient: Neo4jClient, treeSitterUtil: TreeSitterUtil, vectorStore: CodeVectorStore, graph: Graph) {
-      super(dbClient, treeSitterUtil, vectorStore, graph);
-    }
-    
-    /**
-     * Extract function calls from a parsed file and store in Neo4j
-     */
-    async extract(
-      tree: Parser.Tree, 
-      content: string, 
-      filePath: string, 
-      query: Parser.Query
-    ): Promise<void> {
-      //console.log(`Extracting calls from ${filePath}`);
-      
-      // Ensure module node exists
-      await this.ensureModuleNode(filePath);
-      
-      // Get all call expressions
-      const matches = query.matches(tree.rootNode);
-      //console.log(`Found ${matches.length} call matches in ${filePath}`);
-      
-      // First pass: collect all call info without DB operations
-      const callInfos: CallInfo[] = [];
-      for (const match of matches) {
-       
-
-
-
-
-
-
-        let callInfo: CallInfo | null = null;
-        
-        if (match.captures.some(c => c.name === 'call')) {
-          callInfo = await this.extractDirectCallInfo(match, content, filePath);
-        } 
-        else if (match.captures.some(c => c.name === 'method_call')) {
-          callInfo = await this.extractMethodCallInfo(match, content, filePath);
-        }
-        else if (match.captures.some(c => c.name === 'nested_call')) {
-          callInfo = await this.extractNestedCallInfo(match, content, filePath);
-        }
-        else if (match.captures.some(c => c.name === 'iife')) {
-          callInfo = await this.extractIIFEInfo(match, content, filePath);
-        }
-        
-        if (callInfo) {
-          callInfos.push(callInfo);
-        }
-      }
-      //console.log(`Extracted ${callInfos.length} call infos from ${filePath}`);
-      
-      // Process in batches
-      const batchSize = 10; // Smaller batch size for better performance
-      for (let i = 0; i < callInfos.length; i += batchSize) {
-        const batch = callInfos.slice(i, i + batchSize);
-        await this.processCallInfoBatch(batch);
-        //console.log(`Processed batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(callInfos.length/batchSize)}`);
-      }
-      
-      console.log(`Completed extracting ${callInfos.length} calls from ${filePath}`);
-    }
-    
-   /**
-   * Extract direct function call information
+  /**
+   * Extract function calls from a parsed file and store in Neo4j
    */
-  private async extractDirectCallInfo(
-    match: Parser.QueryMatch,
-    content: string,
-    filePath: string
-  ): Promise<CallInfo | null> {
-    const callCapture = match.captures.find(c => c.name === 'call');
-    const calleeCapture = match.captures.find(c => c.name === 'callee');
-    
-    if (!callCapture || !calleeCapture) return null;
-    
-    const callNode = callCapture.node;
-    const calleeName = calleeCapture.node.text;
-    
-    // Find the containing function (caller)
-    const callerInfo = await this.findContainingFunction(callNode, filePath, content);
-    
-    // Generate call ID
-    const callId = this.generateNodeId(
-      'call',
-      `${callerInfo?.name || 'toplevel'}->${calleeName}`,
-      filePath,
-      callNode.startPosition.row,
-      callNode.startPosition.column
-    );
-    
-    // Extract arguments count
-    const argsCount = this.countArguments(callNode);
-    
-    return {
-      id: callId,
-      callNode,
-      callerInfo,
-      calleeName,
-      filePath,
-      argsCount,
-      isTopLevel: !callerInfo,
-      callType: callerInfo ? 'direct' : 'toplevel'
-    };
-  }
-    /**
-     * Process a batch of call infos with optimized DB operations
-     */
-    private async processCallInfoBatch(callInfos: CallInfo[]): Promise<void> {
-      if (callInfos.length === 0) return;
-      
-      // Group calls by type to optimize queries
-      const topLevelCalls: CallInfo[] = [];
-      const functionCalls: CallInfo[] = [];
-      
-      for (const callInfo of callInfos) {
-        if (callInfo.isTopLevel) {
-          topLevelCalls.push(callInfo);
-        } else {
-          functionCalls.push(callInfo);
-        }
-      }
-      
-      // Process function calls (non-top-level)
-      if (functionCalls.length > 0) {
-        await this.processFunctionCalls(functionCalls);
-      }
-      
-      // Process top-level calls
-      if (topLevelCalls.length > 0) {
-        await this.processTopLevelCalls(topLevelCalls);
-      }
-    }
-    
-    /**
-     * Process function calls in a batch
-     */
-    private async processFunctionCalls(calls: CallInfo[]): Promise<void> {
-        let x = calls.filter(e => e.callNode.startPosition.row === 112);
-       
-      await this.dbClient.runInTransaction(async (session) => {
-        // 1. Create all Call nodes in a single query
-        const callParams = calls.map(call => ({
-          id: call.id,
-          callerName: call.callerInfo!.name,
-          calleeName: call.calleeName,
-          lineStart: call.callNode.startPosition.row,
-          columnStart: call.callNode.startPosition.column,
-          argsCount: call.argsCount,
-          callType: 'direct',
-          sourceCode: call.callNode.text,
-          filePath: call.filePath
-        }));
-        
-        await session.run(`
-          UNWIND $calls AS call
-          CREATE (c:Call {
-            id: call.id,
-            callerName: call.callerName,
-            calleeName: call.calleeName,
-            lineStart: call.lineStart,
-            columnStart: call.columnStart,
-            argumentCount: call.argsCount,
-            callType: 'direct',
-            sourceCode: call.sourceCode,
-            createdAt: timestamp()
-          })
-        `, { calls: callParams });
-        
-        // 2. Connect Call nodes to caller functions
-        const callerRelations = calls.map(call => ({
-          callId: call.id,
-          callerId: call.callerInfo!.id,
-          moduleId: `mod:${call.filePath}`
-        }));
-        
-        await session.run(`
-          UNWIND $relations AS rel
-          MATCH (c:Call {id: rel.callId})
-          MATCH (caller:${DbSchema.labels.FUNCTION} {id: rel.callerId})
-          MATCH (m:${DbSchema.labels.MODULE} {id: rel.moduleId})
-          MERGE (caller)-[:${DbSchema.relationships.CALLS}]->(c)
-          MERGE (c)-[:${DbSchema.relationships.DEFINED_IN}]->(m)
-        `, { relations: callerRelations });
-        
-        // 3. Find all callee functions
-        const calleeNames = [...new Set(calls.map(call => call.calleeName))];
-        const calleeResult = await session.run(`
-          MATCH (callee:${DbSchema.labels.FUNCTION})
-          WHERE callee.name IN $calleeNames
-          RETURN callee.id AS id, callee.name AS name
-        `, { calleeNames });
+  async extract(
+    filePath: string,
+    lspClient: any = null,
+  ): Promise<void> {
 
-       
-       //console.log('Callee names:', calleeNames);
-        // Create a map of callee name to id
-        const calleeMap = new Map<string, string>();
-        for (const record of calleeResult.records) {
-          calleeMap.set(record.get('name'), record.get('id'));
-        }
-       // console.log('Callee result:', calleeMap);
-        // 4. Connect calls to existing callees
-        const existingCalleeRelations = calls
-          .filter(call => calleeMap.has(call.calleeName))
-          .map(call => ({
-            callId: call.id,
-            calleeId: calleeMap.get(call.calleeName)
-          }));
-        
-        if (existingCalleeRelations.length > 0) {
-          await session.run(`
-            UNWIND $relations AS rel
-            MATCH (c:Call {id: rel.callId})
-            MATCH (callee:${DbSchema.labels.FUNCTION} {id: rel.calleeId})
-            MERGE (c)-[:REFERS_TO]->(callee)
-          `, { relations: existingCalleeRelations });
-        }
-        
-        // 5. Create placeholder nodes for unresolved callees
-        const unresolvedCallees = calls
-          .filter(call => !calleeMap.has(call.calleeName))
-          .map(call => ({
-            callId: call.id,
-            calleeName: call.calleeName
-          }));
-        
-        if (unresolvedCallees.length > 0) {
-          await session.run(`
-            UNWIND $callees AS callee
-            MATCH (c:Call {id: callee.callId})
-            MERGE (uf:UnresolvedFunction {name: callee.calleeName})
-            MERGE (c)-[:REFERS_TO]->(uf)
-          `, { callees: unresolvedCallees });
-        }
-      });
-    }
-    
-    /**
-     * Process top-level calls in a batch
-     */
-    private async processTopLevelCalls(calls: CallInfo[]): Promise<void> {
-      await this.dbClient.runInTransaction(async (session) => {
-        // 1. Create all top-level Call nodes in a single query
-        const callParams = calls.map(call => ({
-          id: call.id,
-          calleeName: call.calleeName,
-          lineStart: call.callNode.startPosition.row,
-          columnStart: call.callNode.startPosition.column,
-          sourceCode: call.callNode.text,
-          moduleId: `mod:${call.filePath}`
-        }));
-        
-        await session.run(`
-          UNWIND $calls AS call
-          CREATE (c:Call {
-            id: call.id,
-            callerName: 'toplevel',
-            calleeName: call.calleeName,
-            lineStart: call.lineStart,
-            columnStart: call.columnStart,
-            callType: 'toplevel',
-            sourceCode: call.sourceCode,
-            createdAt: timestamp()
-          })
-          WITH c, call
-          MATCH (m:${DbSchema.labels.MODULE} {id: call.moduleId})
-          MERGE (m)-[:${DbSchema.relationships.CALLS}]->(c)
-          MERGE (c)-[:${DbSchema.relationships.DEFINED_IN}]->(m)
-        `, { calls: callParams });
-        
-        // 2. Find all callee functions
-        const calleeNames = [...new Set(calls.map(call => call.calleeName))];
-        const calleeResult = await session.run(`
-          MATCH (callee:${DbSchema.labels.FUNCTION})
-          WHERE callee.name IN $calleeNames
-          RETURN callee.id AS id, callee.name AS name
-        `, { calleeNames });
-        
-        // Create a map of callee name to id
-        const calleeMap = new Map<string, string>();
-        for (const record of calleeResult.records) {
-          calleeMap.set(record.get('name'), record.get('id'));
-        }
-        
-        // 3. Connect calls to existing callees
-        const existingCalleeRelations = calls
-          .filter(call => calleeMap.has(call.calleeName))
-          .map(call => ({
-            callId: call.id,
-            calleeId: calleeMap.get(call.calleeName)
-          }));
-        
-        if (existingCalleeRelations.length > 0) {
-          await session.run(`
-            UNWIND $relations AS rel
-            MATCH (c:Call {id: rel.callId})
-            MATCH (callee:${DbSchema.labels.FUNCTION} {id: rel.calleeId})
-            MERGE (c)-[:REFERS_TO]->(callee)
-          `, { relations: existingCalleeRelations });
-        }
-      });
-    }
+    const fns = this.getFunctionsFromGraph(filePath)
+    console.log('Functions found in graph:', JSON.stringify(fns))
 
-     /**
-   * Extract method call information
-   */
-  private async extractMethodCallInfo(
-    match: Parser.QueryMatch,
-    content: string,
-    filePath: string
-  ): Promise<CallInfo | null> {
-    const methodCallCapture = match.captures.find(c => c.name === 'method_call');
-    const objectCapture = match.captures.find(c => c.name === 'object');
-    const methodCapture = match.captures.find(c => c.name === 'method');
-    
-    if (!methodCallCapture || !objectCapture || !methodCapture) return null;
-    
-    const callNode = methodCallCapture.node;
-    const objectName = objectCapture.node.text;
-    const methodName = methodCapture.node.text;
-    const fullCallName = `${objectName}.${methodName}`;
-    
-    // Find the containing function (caller)
-    const callerInfo = await this.findContainingFunction(callNode, filePath, content);
-    
-    // Generate call ID
-    const callId = this.generateNodeId(
-      'call',
-      `${callerInfo?.name || 'toplevel'}->${fullCallName}`,
-      filePath,
-      callNode.startPosition.row,
-      callNode.startPosition.column
-    );
-    
-    // Extract arguments count
-    const argsCount = this.countArguments(callNode);
-    
-    return {
-      id: callId,
-      callNode,
-      callerInfo,
-      calleeName: fullCallName,
-      objectName,
-      methodName,
-      filePath,
-      argsCount,
-      isTopLevel: !callerInfo,
-      callType: callerInfo ? 'method' : 'toplevel'
-    };
-  }
-
-   /**
-   * Extract nested call information
-   */
-   private async extractNestedCallInfo(
-    match: Parser.QueryMatch,
-    content: string,
-    filePath: string
-  ): Promise<CallInfo | null> {
-    const outerCallCapture = match.captures.find(c => c.name === 'outer_call');
-    const outerFunctionCapture = match.captures.find(c => c.name === 'outer_function');
-    
-    if (!outerCallCapture || !outerFunctionCapture) return null;
-    
-    const callNode = outerCallCapture.node;
-    const calleeName = outerFunctionCapture.node.text || '[nested]';
-    
-    // Find the containing function (caller)
-    const callerInfo = await this.findContainingFunction(callNode, filePath, content);
-    
-    // Generate call ID
-    const callId = this.generateNodeId(
-      'call',
-      `${callerInfo?.name || 'toplevel'}->${calleeName}:nested`,
-      filePath,
-      callNode.startPosition.row,
-      callNode.startPosition.column
-    );
-    
-    // Extract arguments count
-    const argsCount = this.countArguments(callNode);
-    
-    return {
-      id: callId,
-      callNode,
-      callerInfo,
-      calleeName: `${calleeName}(nested)`,
-      filePath,
-      argsCount,
-      isTopLevel: !callerInfo,
-      callType: 'nested'
-    };
-  }
+    console.log('Extracting calls from file:', filePath)
   
+    for (const fn of fns) {
+      const id = fn.id
+      const lspCallees = await lspClient.getCallees(
+        filePath,
+        {
+          line: fn.rowStart - 1,
+          character: fn.character,
+        },
+        false,
+      )
+      console.log("fn name", fn.name)
+      //exclude node modules
+      const filteredCallees = lspCallees.filter(callee => 
+        callee && 
+        callee.file && 
+        typeof callee.file === 'string' && 
+        !callee.file.includes('node_modules')
+      )
+      console.log("lsp callee (all):", lspCallees.length)
+      console.log("lsp callee (filtered):", filteredCallees)
+      const calls = []
+      for(const callee of filteredCallees) {
+        console.log(`Looking for callee: ${callee.name} in file: ${callee.file} at line: ${callee.line + 1} (1-based)`)
+        
+        // Find the callee function in the graph by matching file path, function name, and line
+        const calleeFunction = this.findFunctionByFilePathAndLine(callee.file, callee.line)
+        console.log("calleeFunction", calleeFunction)
+         calls.push({
+          id: calleeFunction.id,
+          name: calleeFunction.name,
+          file: callee.file,
+          rowStart: calleeFunction.rowStart,
+          rowEnd: calleeFunction.rowEnd,
+          columnStart: calleeFunction.columnStart,
+          columnEnd: calleeFunction.columnEnd,
+          signature: calleeFunction.signature
+         })
+ 
+         this.graph.setEdge(id, calleeFunction.id, { type: RelationshipType.CALLS })
     
-    /**
-     * Find the function that contains a given node
-     * Uses caching to avoid repeated tree traversals and DB queries
-     */
-    private async findContainingFunction(
-      node: Parser.SyntaxNode,
-      filePath: string,
-      content: string
-    ): Promise<{ id: string, name: string } | null> {
-      // Generate a cache key based on node position
-      const cacheKey = `${filePath}:${node.startPosition.row}:${node.startPosition.column}`;
-      
-      // Check if we already processed this node position
-      if (this.functionCache.has(cacheKey)) {
-        return this.functionCache.get(cacheKey)!;
       }
-      
-      try {
-        let current = node.parent;
-        
-        // Navigate up the tree to find a function node
-        while (current) {
-          if (
-            current.type === 'function_declaration' ||
-            current.type === 'function_expression' ||
-            current.type === 'arrow_function' ||
-            current.type === 'method_definition' ||
-            (current.type === 'pair' && 
-             (current.childForFieldName('value')?.type === 'function_expression' || 
-              current.childForFieldName('value')?.type === 'arrow_function')) ||
-            (current.type === 'method_definition' && current.parent?.type === 'object')
-          ) {
-            // Generate a function cache key
-            const funcCacheKey = `${filePath}:${current.startPosition.row}:${current.startPosition.column}`;
-            
-            // Check if we already identified this function
-            if (this.functionCache.has(funcCacheKey)) {
-              const result = this.functionCache.get(funcCacheKey)!;
-              this.functionCache.set(cacheKey, result); // Cache for original node too
-              return result;
-            }
-            
-            // Identify the function
-            const result = await this.identifyFunction(current, filePath, content);
-            if (result) {
-              // Cache both the function node and the original node
-              this.functionCache.set(funcCacheKey, result);
-              this.functionCache.set(cacheKey, result);
-              return result;
-            }
-          }
-          
-          current = current.parent;
+
+        const existingData = this.graph.node(id)
+        if (existingData) {
+          console.log(`Updating existing function node: ${id}`)
+          this.graph.setNode(id, {
+            ...existingData,
+            calls: calls,
+          })
         }
-        
-        // Cache null result
-        this.functionCache.set(cacheKey, null);
-        return null;
-      } catch (error) {
-        console.error(`Error finding containing function at ${node.startPosition.row}:${node.startPosition.column} in ${filePath}:`, error);
-        return null;
+
+    }
+
+    //Get all functions with their edge relationships
+    //const allFunctions = this.getAllFunctionsWithEdges()
+     const allFunctions = this.getAllFunctions()
+    console.log('All functions with relationships:', JSON.stringify(allFunctions, null, 2))
+
+
+
+  }
+
+  /**
+   * Get all functions from the graph for a specific file
+   */
+  public getFunctionsFromGraph(filePath?: string): any[] {
+    const functions: any[] = []
+
+    for (const nodeId of this.graph.nodes()) {
+      const nodeData = this.graph.node(nodeId)
+
+      if (nodeData && nodeData.type === 'function') {
+        // If filePath is specified, filter by that file
+        if (!filePath || nodeData.moduleDefinedIn === filePath) {
+          functions.push({
+            id: nodeId,
+            ...nodeData,
+          })
+        }
       }
     }
 
-     /**
-   * Extract IIFE information
+    return functions
+  }
+
+  /**
+   * Get all calls from the graph for a specific file
    */
-  private async extractIIFEInfo(
-    match: Parser.QueryMatch,
-    content: string,
-    filePath: string
-  ): Promise<CallInfo | null> {
-    const iifeCapture = match.captures.find(c => c.name === 'iife');
-    const iifeFunctionCapture = match.captures.find(c => c.name === 'iife_function');
-    
-    if (!iifeCapture) return null;
-    
-    const callNode = iifeCapture.node;
-    
-    // Find the containing function (caller)
-    const callerInfo = await this.findContainingFunction(callNode, filePath, content);
-    
-    // Generate call ID
-    const callId = this.generateNodeId(
-      'call',
-      `${callerInfo?.name || 'toplevel'}->IIFE`,
-      filePath,
-      callNode.startPosition.row,
-      callNode.startPosition.column
-    );
-    
-    return {
-      id: callId,
-      callNode,
-      callerInfo,
-      calleeName: 'IIFE',
-      filePath,
-      argsCount: 0, // IIFEs don't have traditional arguments
-      isTopLevel: !callerInfo,
-      callType: 'iife'
-    };
+  public getCallsFromGraph(filePath?: string): any[] {
+    const calls: any[] = []
+
+    for (const nodeId of this.graph.nodes()) {
+      const nodeData = this.graph.node(nodeId)
+
+      if (nodeData && nodeData.type === 'Call') {
+        // If filePath is specified, filter by module
+        if (!filePath || nodeData.module === `mod:${filePath}`) {
+          calls.push(nodeData)
+        }
+      }
+    }
+
+    return calls
   }
+
+  /**
+   * Get function call relationships from the graph
+   */
+  public getCallRelationshipsFromGraph(): any[] {
+    const relationships: any[] = []
+
+    for (const edgeData of this.graph.edges()) {
+      const edge = this.graph.edge(edgeData)
+
+      if (
+        edge &&
+        (edge.type === DbSchema.relationships.CALLS ||
+          edge.type === 'REFERS_TO')
+      ) {
+        relationships.push({
+          source: edgeData.v,
+          target: edgeData.w,
+          type: edge.type,
+          ...edge,
+        })
+      }
+    }
+
+    return relationships
+  }
+
+
+
+  /**
+   * List all nodes in the graph with their data
+   */
+  public listAllNodes(): any[] {
+    return this.graph.nodes().map((nodeId) => ({
+      id: nodeId,
+      data: this.graph.node(nodeId),
+    }))
+  }
+
+  /**
+   * Get nodes by type
+   */
+  public getNodesByType(type: string): any[] {
+    return this.graph
+      .nodes()
+      .map((nodeId) => ({ id: nodeId, data: this.graph.node(nodeId) }))
+      .filter((node) => node.data?.type === type)
+  }
+
+  /**
+   * Get graph statistics
+   */
+  public getGraphStats(): any {
+    const stats = {
+      totalNodes: this.graph.nodes().length,
+      totalEdges: this.graph.edges().length,
+      nodeTypes: {} as Record<string, number>,
+    }
+
+    this.graph.nodes().forEach((nodeId) => {
+      const nodeData = this.graph.node(nodeId)
+      const type = nodeData?.type || 'unknown'
+      stats.nodeTypes[type] = (stats.nodeTypes[type] || 0) + 1
+    })
+
+    return stats
+  }
+
+  /**
+   * Print graph summary to console
+   */
+  public printGraphSummary(): void {
+    const stats = this.getGraphStats()
+    console.log('=== Graph Summary ===')
+    console.log(`Total Nodes: ${stats.totalNodes}`)
+    console.log(`Total Edges: ${stats.totalEdges}`)
+    console.log('Node Types:')
+    Object.entries(stats.nodeTypes).forEach(([type, count]) => {
+      console.log(`  ${type}: ${count}`)
+    })
+  }
+
+  /**
+   * Find a callee function in the graph by name and file path
+   */
+  private findCalleeInGraph(functionName: string, filePath: string, lspCalleeInfo?: any): any | null {
+    // If LSP callee info is provided and has line information, try exact line match first
+    if (lspCalleeInfo && typeof lspCalleeInfo.line === 'number') {
+      const lspLineOneBased = lspCalleeInfo.line + 1 // Convert 0-based to 1-based
+      
+      // Try exact line match
+      const exactMatch = this.findFunctionByFilePathAndLine(filePath, lspLineOneBased)
+      if (exactMatch && exactMatch.name === functionName) {
+        console.log(`✓ Exact line match found: ${functionName} at line ${lspLineOneBased}`)
+        return exactMatch
+      }
+      
+      // Try with tolerance if exact line doesn't match
+      const toleranceMatch = this.findFunctionByFilePathAndLineWithTolerance(filePath, lspLineOneBased, 3)
+      if (toleranceMatch && toleranceMatch.name === functionName) {
+        console.log(`✓ Tolerance match found: ${functionName} near line ${lspLineOneBased}`)
+        return toleranceMatch
+      }
+      
+      console.log(`No line-based match found for ${functionName} at line ${lspLineOneBased}`)
+    }
     
-    /**
-     * Identify a function node and return its info
-     * Optimized to reduce database operations
-     */
-    private async identifyFunction(
-      funcNode: Parser.SyntaxNode,
-      filePath: string,
-      content: string
-    ): Promise<{ id: string, name: string } | null> {
-      try {
-        let funcName = '<anonymous>';
-        
-        // Extract function name based on node type
-        if (funcNode.type === 'function_declaration') {
-          const nameNode = funcNode.childForFieldName('name');
-          if (nameNode) funcName = nameNode.text;
-        }
-        else if (funcNode.type === 'method_definition') {
-          const nameNode = funcNode.childForFieldName('name');
-          if (nameNode) {
-            // Check for class context
-            let current = funcNode.parent;
-            let className = null;
-            
-            while (current) {
-              if (current.type === 'class_declaration' || current.type === 'class') {
-                const classNameNode = current.childForFieldName('name');
-                if (classNameNode) {
-                  className = classNameNode.text;
-                  break;
-                }
-              }
-              current = current.parent;
-            }
-            
-            funcName = className ? `${className}.${nameNode.text}` : nameNode.text;
-          }
-        }
-        else if (funcNode.type === 'arrow_function' || funcNode.type === 'function_expression') {
-          // Handle variable assignments, object properties, etc.
-          let current = funcNode.parent;
-          
-          while (current) {
-            if (current.type === 'variable_declarator') {
-              const nameNode = current.childForFieldName('name');
-              if (nameNode) {
-                funcName = nameNode.text;
-                break;
-              }
-            } else if (current.type === 'pair') {
-              const keyNode = current.childForFieldName('key');
-              if (keyNode) {
-                funcName = keyNode.text;
-                break;
-              }
-            } else if (current.type === 'assignment_expression') {
-              const leftNode = current.childForFieldName('left');
-              if (leftNode) {
-                funcName = leftNode.text;
-                break;
-              }
-            } else if (current.type === 'export_statement') {
-              funcName = 'default_export';
-              break;
-            }
-            
-            current = current.parent;
-          }
-        }
-        
-        // Generate a unique ID for this function
-        const funcId = this.generateNodeId(
-          'func',
-          funcName,
-          filePath,
-          funcNode.startPosition.row,
-          funcNode.startPosition.column
-        );
-        
-        // Check if this function exists in the database
-        // Use a light query with indexes
-        const result = await this.dbClient.query(`
-          MATCH (f:${DbSchema.labels.FUNCTION})
-          WHERE f.id = $funcId 
-          RETURN f.id AS id, f.name AS name
-          LIMIT 1
-        `, {
-          funcId
-        });
-        
-        if (result.length > 0) {
-          return {
-            id: result[0].id,
-            name: result[0].name || funcName
-          };
-        }
-        
-        // Function doesn't exist - create it
-        const sourceCode = funcNode.text.length > 500 
-          ? funcNode.text.substring(0, 500) + '...' 
-          : funcNode.text;
-        
-        await this.dbClient.query(`
-          // Create function node
-          MERGE (f:${DbSchema.labels.FUNCTION} {id: $funcId})
-          ON CREATE SET 
-            f.name = $funcName,
-            f.lineStart = $lineStart,
-            f.lineEnd = $lineEnd,
-            f.columnStart = $columnStart,
-            f.columnEnd = $columnEnd,
-            f.sourceCode = $sourceCode,
-            f.isPlaceholder = true,
-            f.createdAt = timestamp()
-          
-          // Connect to module
-          WITH f
-          MATCH (m:${DbSchema.labels.MODULE} {id: $moduleId})
-          MERGE (f)-[:${DbSchema.relationships.DEFINED_IN}]->(m)
-        `, {
-          funcId,
-          funcName,
-          lineStart: funcNode.startPosition.row,
-          lineEnd: funcNode.endPosition.row,
-          columnStart: funcNode.startPosition.column,
-          columnEnd: funcNode.endPosition.column,
-          sourceCode,
-          moduleId: `mod:${filePath}`
-        });
-        
+    // Fallback: traditional name and file path matching
+    for (const nodeId of this.graph.nodes()) {
+      const nodeData = this.graph.node(nodeId)
+      
+      if (nodeData && 
+          nodeData.type === 'function' && 
+          nodeData.name === functionName && 
+          nodeData.moduleDefinedIn === filePath) {
+        console.log(`⚠ Fallback name match found: ${functionName} in file ${filePath}`)
         return {
-          id: funcId,
-          name: funcName
-        };
-      } catch (error) {
-        console.error(`Error identifying function at ${funcNode.startPosition.row}:${funcNode.startPosition.column} in ${filePath}:`, error);
-        return null;
-      }
-    }
-    
-    /**
-     * Count arguments in a call expression
-     */
-    private countArguments(callNode: Parser.SyntaxNode): number {
-      try {
-        const argsNode = callNode.childForFieldName('arguments');
-        if (!argsNode) return 0;
-        
-        let count = 0;
-        let inArg = false;
-        
-        for (let i = 0; i < argsNode.childCount; i++) {
-          const child = argsNode.child(i);
-          if (!child) continue;
-          
-          if (child.type !== ',') {
-            if (!inArg) {
-              count++;
-              inArg = true;
-            }
-          } else {
-            inArg = false;
-          }
+          id: nodeId,
+          ...nodeData
         }
-        
-        return count;
-      } catch (error) {
-        console.error('Error counting arguments:', error);
-        return 0;
       }
     }
     
-    /**
-     * Clear function cache
-     */
-    public clearCache(): void {
-      this.functionCache.clear();
+    // Debug: Show all functions in the file if no match found
+    const allFunctionsInFile = this.findAllFunctionsInFile(filePath)
+    if (allFunctionsInFile.length > 0) {
+      console.log(`Available functions in ${filePath}:`)
+      allFunctionsInFile.forEach(fn => {
+        console.log(`  - ${fn.name} at line ${fn.rowStart}`)
+      })
+    }
+    
+    return null
+  }
+
+  /**
+   * Find a function in the graph by file path and line number
+   */
+  private findFunctionByFilePathAndLine(filePath: string, line: number): any | null {
+    for (const nodeId of this.graph.nodes()) {
+      const nodeData = this.graph.node(nodeId)
+      
+      if (nodeData && 
+          nodeData.type === 'function' && 
+          nodeData.moduleDefinedIn === filePath &&
+          nodeData.rowStart === line) {
+        return {
+          id: nodeId,
+          ...nodeData
+        }
+      }
+    }
+    return null
+  }
+
+  /**
+   * Find a function in the graph by file path and line number with tolerance
+   */
+  private findFunctionByFilePathAndLineWithTolerance(filePath: string, line: number, tolerance: number = 2): any | null {
+    const candidates: any[] = []
+    
+    for (const nodeId of this.graph.nodes()) {
+      const nodeData = this.graph.node(nodeId)
+      
+      if (nodeData && 
+          nodeData.type === 'function' && 
+          nodeData.moduleDefinedIn === filePath) {
+        
+        // Calculate line difference
+        const lineDiff = Math.abs(nodeData.rowStart - line)
+        
+        if (lineDiff <= tolerance) {
+          candidates.push({
+            id: nodeId,
+            ...nodeData,
+            lineDifference: lineDiff
+          })
+        }
+      }
+    }
+    
+    // Return the closest match (smallest line difference)
+    if (candidates.length > 0) {
+      candidates.sort((a, b) => a.lineDifference - b.lineDifference)
+      const closest = candidates[0]
+      console.log(`Found function with tolerance: ${closest.name} at line ${closest.rowStart} (requested line ${line}, diff: ${closest.lineDifference})`)
+      return closest
+    }
+    
+    return null
+  }
+
+  /**
+   * Find all functions in a specific file
+   */
+  private findAllFunctionsInFile(filePath: string): any[] {
+    const functions: any[] = []
+    
+    for (const nodeId of this.graph.nodes()) {
+      const nodeData = this.graph.node(nodeId)
+      
+      if (nodeData && 
+          nodeData.type === 'function' && 
+          nodeData.moduleDefinedIn === filePath) {
+        functions.push({
+          id: nodeId,
+          ...nodeData
+        })
+      }
+    }
+    
+    return functions.sort((a, b) => a.rowStart - b.rowStart) // Sort by line number
+  }
+
+  /**
+   * Get all functions from the graph as an array of objects
+   */
+  public getAllFunctions(): any[] {
+    const functions: any[] = []
+    
+    for (const nodeId of this.graph.nodes()) {
+      const nodeData = this.graph.node(nodeId)
+      
+      if (nodeData && nodeData.type === 'function') {
+        functions.push({
+          id: nodeId,
+          name: nodeData.name,
+          moduleDefinedIn: nodeData.moduleDefinedIn,
+          rowStart: nodeData.rowStart,
+          rowEnd: nodeData.rowEnd,
+          character: nodeData.character,
+          ...nodeData
+        })
+      }
+    }
+    
+    // Sort by file path, then by line number
+    return functions.sort((a, b) => {
+      const fileComparison = (a.moduleDefinedIn || '').localeCompare(b.moduleDefinedIn || '')
+      if (fileComparison !== 0) return fileComparison
+      return (a.rowStart || 0) - (b.rowStart || 0)
+    })
+  }
+
+  /**
+   * Get all functions with their edge relationships
+   */
+  public getAllFunctionsWithEdges(): any[] {
+    const functions: any[] = []
+    
+    for (const nodeId of this.graph.nodes()) {
+      const nodeData = this.graph.node(nodeId)
+      
+      if (nodeData && nodeData.type === 'function') {
+        // Get outgoing edges (functions this function calls)
+        const outgoingEdges = this.graph.outEdges(nodeId) || []
+        const callsTo = outgoingEdges.map(edge => {
+          const edgeData = this.graph.edge(edge)
+          const targetNode = this.graph.node(edge.w)
+          return {
+            edgeId: `${edge.v}-${edge.w}`,
+            targetId: edge.w,
+            targetName: targetNode?.name || 'unknown',
+            targetType: targetNode?.type || 'unknown',
+            targetFile: targetNode?.moduleDefinedIn,
+            relationshipType: edgeData?.type || 'unknown',
+            edgeData
+          }
+        })
+        
+        // Get incoming edges (functions that call this function)
+        const incomingEdges = this.graph.inEdges(nodeId) || []
+        const calledBy = incomingEdges.map(edge => {
+          const edgeData = this.graph.edge(edge)
+          const sourceNode = this.graph.node(edge.v)
+          return {
+            edgeId: `${edge.v}-${edge.w}`,
+            sourceId: edge.v,
+            sourceName: sourceNode?.name || 'unknown',
+            sourceType: sourceNode?.type || 'unknown',
+            sourceFile: sourceNode?.moduleDefinedIn,
+            relationshipType: edgeData?.type || 'unknown',
+            edgeData
+          }
+        })
+        
+        functions.push({
+          id: nodeId,
+          name: nodeData.name,
+          moduleDefinedIn: nodeData.moduleDefinedIn,
+          rowStart: nodeData.rowStart,
+          rowEnd: nodeData.rowEnd,
+          character: nodeData.character,
+          ...nodeData,
+          relationships: {
+            callsTo: callsTo,
+            calledBy: calledBy,
+            totalOutgoing: outgoingEdges.length,
+            totalIncoming: incomingEdges.length
+          }
+        })
+      }
+    }
+    
+    // Sort by file path, then by line number
+    return functions.sort((a, b) => {
+      const fileComparison = (a.moduleDefinedIn || '').localeCompare(b.moduleDefinedIn || '')
+      if (fileComparison !== 0) return fileComparison
+      return (a.rowStart || 0) - (b.rowStart || 0)
+    })
+  }
+
+  /**
+   * Create a call relationship between caller and callee
+   */
+  private async createCallRelationship(callerId: string, calleeId: string, lspCalleeInfo: any): Promise<void> {
+    try {
+      // Generate a unique call ID
+      const callId = `call:${callerId}:${calleeId}:${lspCalleeInfo.callSite.line}:${lspCalleeInfo.callSite.column}`
+      
+      // Create call node in graph
+      const callData = {
+        type: 'call',
+        callerFunctionId: callerId,
+        calleeFunctionId: calleeId,
+        calleeName: lspCalleeInfo.name,
+        callSiteLine: lspCalleeInfo.callSite.line,
+        callSiteColumn: lspCalleeInfo.callSite.column,
+        targetFile: lspCalleeInfo.file,
+        targetLine: lspCalleeInfo.line,
+        targetColumn: lspCalleeInfo.column
+      }
+      
+      // Add call node to graph
+      this.graph.setNode(callId, callData)
+      
+      // Create edges: caller -> call -> callee
+      this.graph.setEdge(callerId, callId, {
+        type: 'CALLS',
+        source: callerId,
+        target: callId
+      })
+      
+      this.graph.setEdge(callId, calleeId, {
+        type: 'REFERS_TO',
+        source: callId,
+        target: calleeId
+      })
+      
+      console.log(`Created call relationship: ${callerId} -> ${callId} -> ${calleeId}`)
+      
+    } catch (error) {
+      console.error('Error creating call relationship:', error)
     }
   }
+}

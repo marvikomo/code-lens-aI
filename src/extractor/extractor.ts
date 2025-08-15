@@ -19,7 +19,7 @@ export abstract class Extractor {
     content: string,
     filePath: string,
     query: Parser.Query,
-    files?: string[],
+    lspClient?: any
   ): Promise<void>
 
   /**
