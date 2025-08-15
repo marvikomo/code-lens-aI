@@ -219,49 +219,56 @@ export class CodeAnalyzer {
 
   private async performAnalysis(files: string[]): Promise<void> {
     console.log('Starting static AST analysis phase...', files)
-
     const client = new TypeScriptLSPClient('test-dir/codebase')
-    client.start()
+    try {
+      client.start()
 
-    client.openAllProjectFiles(files)
-    // Analyze parsed files
-    for (const filePath of files) {
-      const { language, tree, content } = await this.parser.parseFile(filePath)
+      client.openAllProjectFiles(files)
+      // Analyze parsed files
+      for (const filePath of files) {
+        const { language, tree, content } = await this.parser.parseFile(
+          filePath,
+        )
 
-      //const parsedFile = this.parsedFiles.get(filePath)!;
+        //const parsedFile = this.parsedFiles.get(filePath)!;
 
-      const functionQuery = this.registry.get(language).queries.functions
-      const classQuery = this.registry.get(language).queries.classes
-      const importQuery = this.registry.get(language).queries.imports
-      const exportQuery = this.registry.get(language).queries.exports
-      const callQuery = this.registry.get(language).queries.calls
-      const variableQuery = this.registry.get(language).queries.variables
+        const functionQuery = this.registry.get(language).queries.functions
+        const classQuery = this.registry.get(language).queries.classes
+        const importQuery = this.registry.get(language).queries.imports
+        const exportQuery = this.registry.get(language).queries.exports
+        const callQuery = this.registry.get(language).queries.calls
+        const variableQuery = this.registry.get(language).queries.variables
 
-      //await this.importExtractor.extract(tree, content, filePath, importQuery, files);
+        //await this.importExtractor.extract(tree, content, filePath, importQuery, files);
 
-      await this.functionExtractor.extract(
-        tree,
-        content,
-        filePath,
-        functionQuery,
-        client,
-      )
+        await this.functionExtractor.extract(
+          tree,
+          content,
+          filePath,
+          functionQuery,
+          client,
+        )
 
-      // await this.classExtractor.extract(tree, content, filePath, classQuery);
+        // await this.classExtractor.extract(tree, content, filePath, classQuery);
 
-      // await this.exportExtractor.extract(tree, content, filePath, exportQuery);
+        // await this.exportExtractor.extract(tree, content, filePath, exportQuery);
 
-      // await this.variableExtractor.extract(tree, content, filePath, variableQuery);
+        // await this.variableExtractor.extract(tree, content, filePath, variableQuery);
 
-      // Extract function declarations
-      // this.extractFunctions(parsedFile);
+        // Extract function declarations
+        // this.extractFunctions(parsedFile);
 
-      // // Extract function calls
-      // this.extractCalls(parsedFile);
-    }
+        // // Extract function calls
+        // this.extractCalls(parsedFile);
+      }
 
-    for (const filePath of files) {
-         await this.callExtractor.extract(filePath, client)
+      for (const filePath of files) {
+        await this.callExtractor.extract(filePath, client)
+      }
+    } catch (error) {
+      console.error('Error during analysis:', error)
+    } finally {
+      client.shutdown()
     }
   }
 
