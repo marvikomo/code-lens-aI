@@ -10,7 +10,6 @@ import { Graph } from 'graphlib'
 import { RelationshipType } from '../enum/RelationshipType'
 
 export class FunctionExtractor extends Extractor {
-  private functionNodeService: FunctionNodeService
   constructor(
     dbClient: Neo4jClient,
     treeSitterUtil: TreeSitterUtil,
@@ -18,7 +17,6 @@ export class FunctionExtractor extends Extractor {
     graph: Graph,
   ) {
     super(dbClient, treeSitterUtil, vectorStore, graph)
-    this.functionNodeService = new FunctionNodeService(dbClient)
   }
 
   /**
@@ -31,6 +29,7 @@ export class FunctionExtractor extends Extractor {
     query: Parser.Query,
     lspClient: any = null,
   ): Promise<void> {
+    //TODO include function docstrings in the extraction
     // Ensure module node exists
     await this.ensureModuleNode(filePath)
 
@@ -58,8 +57,6 @@ export class FunctionExtractor extends Extractor {
       const scope = this.treeSitterUtils.determineNodeContext(funcNode)
       const nodeType = this.treeSitterUtils.getNodeType(scope.parentNode)
       const signature = this.treeSitterUtils.extractFunctionSignature(funcNode)
-      const name = this.treeSitterUtils.extractFunctionName(funcNode)
-      const fnCalls = this.treeSitterUtils.findFunctionCalls(funcNode)
       const fnId = this.generateNodeId(
         'function',
         null,
@@ -82,7 +79,6 @@ export class FunctionExtractor extends Extractor {
         )
       }
 
-      const calls = []
       // console.log("fn ids", fnId)
 
       // console.log("SCOPE", scope)
@@ -131,80 +127,11 @@ export class FunctionExtractor extends Extractor {
 
       this.graph.setEdge(fnId, moduleId, { type: RelationshipType.DEFINED_IN })
 
-      // this.graph.setNode(nodeId, {
-      //   type: 'node',
-      //   name: scope.name,
-      //   rowStart: scope.parentNode.startPosition.row + 1,
-      //   rowEnd: scope.parentNode.endPosition.row + 1,
-      //   columnStart: scope.parentNode.startPosition.column + 1,
-      //   columnEnd: scope.parentNode.endPosition.column + 1,
-      //   scopeType: scope.type
-
-      // })
+  
       if (nodeId) {
         this.graph.setEdge(fnId, nodeId, { type: RelationshipType.DEFINED_IN })
       }
 
-      //  fnCalls.forEach(call => {
-      //   calls.push({
-      //     text: call.node.text,
-      //     rowStart: call.node.startPosition.row + 1,
-      //     rowEnd: call.node.endPosition.row + 1,
-      //     columnStart: call.node.startPosition.column + 1,
-      //     columnEnd: call.node.endPosition.column + 1,
-      //     name: call.functionName,
-      //     callType: call.callType,
-      //     arguments: call.arguments.map(arg => arg.text)
-      //   })
-
-      //   const calleeId = this.generateNodeId('callee', name, filePath, call.node.startPosition.row + 1, call.node.endPosition.row + 1, call.node.startPosition.column + 1, call.node.endPosition.column + 1)
-
-      //   this.graph.setNode(calleeId, {
-      //     type: "callee",
-      //     moduleDefinedIn: filePath,
-      //     code: call.node.text,
-      //     rowStart: call.node.startPosition.row + 1,
-      //     rowEnd: call.node.endPosition.row + 1,
-      //     columnStart: call.node.startPosition.column + 1,
-      //     columnEnd: call.node.endPosition.column + 1,
-      //     name: call.functionName,
-      //     callType: call.callType,
-      //     arguments: call.arguments.map(arg => arg.text)
-      //    })
-
-      //   this.graph.setEdge(fnId, calleeId, { type: 'calls'})
-      //   this.graph.setEdge(calleeId, moduleId, { type: 'defined in module'})
-
-      // })
-
-      const nodeData = this.graph.node(fnId)
-      nodeData.calls = calls
-
-      //console.log("nodedata", nodeData)
-
-      // Get function details
-      //const funcName = nameCapture ? nameCapture.node.text : '<anonymous>'
-
-      // functionIndexes.push({
-      //   functionNode: funcNode,
-      //   funcName,
-      //   filePath,
-      // })
-
-      // chunks.push({
-      //   content: funcNode.text,
-      //   language: 'typescript',
-      //   type: 'function',
-      //   name: funcName,
-      //   startLine: funcNode.startPosition.row,
-      //   endLine: funcNode.endPosition.row,
-      //   filePath,
-      //   metadata: {
-      //     imports: [],
-      //     exports: [],
-      //     dependencies: []
-      //   }
-      // })
     }
 
     console.log(`Extracted ${matches.length} functions from ${filePath}`)

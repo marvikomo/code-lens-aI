@@ -213,38 +213,112 @@ export const VariableQuery = `
   left: (identifier) @name) @for_in_var
 
 `
+export const ImportQuery = `  
+[  
+  ;; ES6 Default imports  
+  (import_statement  
+    (import_clause  
+      (identifier) @default_import))  
+    
+  ;; ES6 Namespace imports (import * as name)  
+  (import_statement  
+    (import_clause  
+      (namespace_import  
+        (identifier) @namespace_import)))  
+    
+  ;; ES6 Named imports - capture the whole statement  
+  (import_statement  
+    (import_clause  
+      (named_imports)) @named_imports_statement)  
 
-export const ImportQuery = `
-;; Default imports
-(import_statement
-  (import_clause
-    (identifier) @name)
-  source: (string) @source
-) @import_statement
+  ;; ES6 Mixed imports (default + named) - capture the whole statement
+  (import_statement  
+    (import_clause  
+      (identifier) @default_import
+      (named_imports)) @mixed_imports_statement)
+    
+  ;; Side-effect imports (import "module")   
+  (import_statement  
+    source: (string) @side_effect_import)  
+    
+  ;; CommonJS require with destructuring (const/let)
+  (lexical_declaration  
+    (variable_declarator  
+      name: (object_pattern) @destructured_require  
+      value: (call_expression  
+        function: (identifier) @require_function  
+        arguments: (arguments (string) @require_source))  
+      (#eq? @require_function "require")))  
+    
+  ;; CommonJS simple require (const/let)
+  (lexical_declaration  
+    (variable_declarator  
+      name: (identifier) @simple_require  
+      value: (call_expression  
+        function: (identifier) @require_function  
+        arguments: (arguments (string) @require_source))  
+      (#eq? @require_function "require")))  
 
-;; Namespace imports
-(import_statement
-  (import_clause
-    (namespace_import
-      (identifier) @name))
-  source: (string) @source
-) @import_statement
+  ;; CommonJS require with var declaration
+  (variable_declaration  
+    (variable_declarator  
+      name: (identifier) @simple_require  
+      value: (call_expression  
+        function: (identifier) @require_function  
+        arguments: (arguments (string) @require_source))  
+      (#eq? @require_function "require")))
 
-;; Named imports
-(import_statement
-  (import_clause
-    (named_imports
-      (import_specifier
-        name: (identifier) @name
-        alias: (identifier)? @alias)?))
-  source: (string) @source
-) @import_statement
+  ;; CommonJS require with var destructuring
+  (variable_declaration  
+    (variable_declarator  
+      name: (object_pattern) @destructured_require  
+      value: (call_expression  
+        function: (identifier) @require_function  
+        arguments: (arguments (string) @require_source))  
+      (#eq? @require_function "require")))
 
+  ;; Assignment-based require (no declaration)
+  (assignment_expression  
+    left: (identifier) @simple_require  
+    right: (call_expression  
+      function: (identifier) @require_function  
+      arguments: (arguments (string) @require_source))  
+    (#eq? @require_function "require"))
 
-; Require statements
-(call_expression
-  function: (identifier) @name
-  arguments: (arguments (string) @source)) @require_statement
+  ;; Require with property access (const parse = require('url').parse)
+  (lexical_declaration  
+    (variable_declarator  
+      name: (identifier) @property_require  
+      value: (member_expression  
+        object: (call_expression  
+          function: (identifier) @require_function  
+          arguments: (arguments (string) @require_source))  
+        property: (property_identifier) @property_name)  
+      (#eq? @require_function "require")))
+
+  ;; Require with property access using var
+  (variable_declaration  
+    (variable_declarator  
+      name: (identifier) @property_require  
+      value: (member_expression  
+        object: (call_expression  
+          function: (identifier) @require_function  
+          arguments: (arguments (string) @require_source))  
+        property: (property_identifier) @property_name)  
+      (#eq? @require_function "require")))
+    
+  ;; Dynamic imports (basic)
+  (call_expression  
+    function: (import) @dynamic_import  
+    arguments: (arguments (string) @dynamic_source))  
+
+  ;; Async dynamic imports
+  (await_expression  
+    (call_expression  
+      function: (import) @async_dynamic_import  
+      arguments: (arguments (string) @dynamic_source)))
+      
+] @import  
 `
 
 export const ExportQuery = `;; Export query for JavaScript/TypeScript

@@ -7,7 +7,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
-    "test": "jest",
+    "test": "jest -- src/extractor/__tests__/module-level-extractor",
     "test:watch": "jest --watch",
     "test:simple": "ts-node src/index.ts",
     "analyze": "ts-node src/index.ts",

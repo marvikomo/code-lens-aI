@@ -39,6 +39,7 @@ import { TypeScriptLSPClient } from '../language-server/typescript-server/lsp-cl
 import { getLSPClient } from '../language-server/index'
 
 import { CodeVectorStore } from '../vector-store'
+import { ModuleLEvelExtractor } from '../extractor/module-level-extractor'
 
 export class CodeAnalyzer {
 
@@ -49,6 +50,7 @@ export class CodeAnalyzer {
   private exportExtractor: Extractor
   private callExtractor: CallExtractor
   private variableExtractor: Extractor
+  private moduleLevelExtractor: Extractor
 
   private parser: TreeSitterParser
 
@@ -117,6 +119,10 @@ export class CodeAnalyzer {
       this.vectorStore,
       this.graph,
     )
+    this.moduleLevelExtractor = new ModuleLEvelExtractor( dbClient,
+      this.treeSitterUtil,
+      this.vectorStore,
+      this.graph)
 
     this.parser = new TreeSitterParser(this.registry)
   }
@@ -223,15 +229,23 @@ export class CodeAnalyzer {
 
         //await this.importExtractor.extract(tree, content, filePath, importQuery, files);
 
-        await this.functionExtractor.extract(
+        // await this.functionExtractor.extract(
+        //   tree,
+        //   content,
+        //   filePath,
+        //   functionQuery,
+        //   client,
+        // )
+
+        // await this.classExtractor.extract(tree, content, filePath, classQuery);
+
+        await this.moduleLevelExtractor.extract(
           tree,
           content,
           filePath,
-          functionQuery,
+          importQuery,
           client,
         )
-
-        // await this.classExtractor.extract(tree, content, filePath, classQuery);
 
         // await this.exportExtractor.extract(tree, content, filePath, exportQuery);
 
@@ -244,9 +258,9 @@ export class CodeAnalyzer {
         // this.extractCalls(parsedFile);
       }
 
-      for (const filePath of files) {
-        await this.callExtractor.extract(filePath, client)
-      }
+    //   for (const filePath of files) {
+    //     await this.callExtractor.extract(filePath, client)
+    //   }
     } catch (error) {
       console.error('Error during analysis:', error)
     } finally {
