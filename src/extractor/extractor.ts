@@ -7,8 +7,8 @@ import { Graph } from 'graphlib';
 
 export abstract class Extractor {
   protected dbUtils: DbUtils
-  constructor(protected dbClient: Neo4jClient, protected treeSitterUtils:TreeSitterUtil, protected vectorStore: CodeVectorStore, protected graph: Graph) {
-    this.dbUtils = new DbUtils(dbClient)
+  constructor(protected treeSitterUtils:TreeSitterUtil, protected vectorStore: CodeVectorStore, protected graph: Graph) {
+ 
   }
 
   /**
@@ -41,6 +41,6 @@ export abstract class Extractor {
    * Create a module node if it doesn't exist
    */
   protected async ensureModuleNode(filePath: string): Promise<void> {
-    return this.dbUtils.ensureModuleNode(filePath);
+   // return this.dbUtils.ensureModuleNode(filePath);
   }
 }

@@ -11,13 +11,12 @@ import { RelationshipType } from '../enum/RelationshipType'
 export class ClassExtractor extends Extractor {
   private classNodeService: ClassNodeService
   constructor(
-    dbClient: Neo4jClient,
     treeSitterUtil: TreeSitterUtil,
     vectorStore: CodeVectorStore,
     graph: Graph,
   ) {
-    super(dbClient, treeSitterUtil, vectorStore, graph)
-    this.classNodeService = new ClassNodeService(dbClient)
+    super(treeSitterUtil, vectorStore, graph)
+
   }
   /**
    * Extract classes from a parsed file and store in Neo4j
@@ -100,10 +99,10 @@ export class ClassExtractor extends Extractor {
 
       const classSignature = extractClassSignature(classCapture.node.text)
 
-      console.log('classCapture', classCapture.node.text)
-      console.log('NAME', nameCapture?.node.text)
+     // console.log('classCapture', classCapture.node.text)
+      //console.log('NAME', nameCapture?.node.text)
 
-      console.log("class signature", classSignature)
+      //console.log("class signature", classSignature)
 
       const classMembers = this.treeSitterUtils.getAllClassMembers(
         classCapture.node,
@@ -135,13 +134,13 @@ export class ClassExtractor extends Extractor {
         columnStart: classCapture.node.startPosition.column + 1,
         columnEnd: classCapture.node.endPosition.column + 1,
         signature: classSignature,
-        methods: _classMembers
+        methods: JSON.stringify(_classMembers)
       })
 
        this.graph.setEdge(classId, moduleId, { type: RelationshipType.DEFINED_IN })
     }
 
-    console.log(`Extracted ${matches.length} classes from ${filePath}`)
+   // console.log(`Extracted ${matches.length} classes from ${filePath}`)
 
    
   }

@@ -13,15 +13,11 @@ import { CodeVectorStore } from '../vector-store';
 import { Graph } from 'graphlib';
 
 export class ImportExtractor extends Extractor {
-  private functionNodeService: FunctionNodeService;
-  private classNodeService: ClassNodeService;
   private importNodeService: ImportNodeService;
   
-  constructor(dbClient: Neo4jClient, treeSitterUtil: TreeSitterUtil, vectorStore: CodeVectorStore, graph: Graph) {
-    super(dbClient, treeSitterUtil, vectorStore, graph);
-    this.functionNodeService = new FunctionNodeService(dbClient);
-    this.classNodeService = new ClassNodeService(dbClient);
-    this.importNodeService = new ImportNodeService(dbClient, treeSitterUtil);
+  constructor(treeSitterUtil: TreeSitterUtil, vectorStore: CodeVectorStore, graph: Graph) {
+    super( treeSitterUtil, vectorStore, graph);
+
   }
   
   /**

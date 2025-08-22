@@ -23,9 +23,9 @@ export class CallExtractor  {
   ): Promise<void> {
     const moduleId = `mod:${filePath}`
     const fns = this.graphUtil.getFunctionsFromGraph(filePath)
-    console.log('Functions found in graph:', JSON.stringify(fns))
+    //console.log('Functions found in graph:', JSON.stringify(fns))
 
-    console.log('Extracting calls from file:', filePath)
+   //console.log('Extracting calls from file:', filePath)
   
     for (const fn of fns) {
       const id = fn.id
@@ -37,7 +37,7 @@ export class CallExtractor  {
         },
         false,
       )
-      console.log("fn name", fn.name)
+     // console.log("fn name", fn.name)
       //exclude node modules
       const filteredCallees = lspCallees.filter(callee => 
         callee && 
@@ -45,15 +45,15 @@ export class CallExtractor  {
         typeof callee.file === 'string' && 
         !callee.file.includes('node_modules')
       )
-      console.log("lsp callee (all):", lspCallees.length)
-      console.log("lsp callee (filtered):", filteredCallees)
+     // console.log("lsp callee (all):", lspCallees.length)
+      //console.log("lsp callee (filtered):", filteredCallees)
       const calls = []
       for(const callee of filteredCallees) {
-        console.log(`Looking for callee: ${callee.name} in file: ${callee.file} at line: ${callee.line + 1} (1-based)`)
+        //console.log(`Looking for callee: ${callee.name} in file: ${callee.file} at line: ${callee.line + 1} (1-based)`)
         
         // Find the callee function in the graph by matching file path, function name, and line
         const calleeFunction = this.graphUtil.findFunctionByFilePathAndLine(callee.file, callee.line)
-        console.log("calleeFunction", calleeFunction)
+  
          calls.push({
           id: calleeFunction.id,
           name: calleeFunction.name,
@@ -72,10 +72,10 @@ export class CallExtractor  {
 
         const existingData = this.graph.node(id)
         if (existingData) {
-          console.log(`Updating existing function node: ${id}`)
+         // console.log(`Updating existing function node: ${id}`)
           this.graph.setNode(id, {
             ...existingData,
-            calls: calls,
+            calls: JSON.stringify(calls),
           })
         }
 
@@ -84,7 +84,7 @@ export class CallExtractor  {
     //Get all functions with their edge relationships
     //const allFunctions = this.getAllFunctionsWithEdges()
      const allFunctions = this.graphUtil.getAllFunctions()
-    console.log('All functions with relationships:', JSON.stringify(allFunctions, null, 2))
+   // console.log('All functions with relationships:', JSON.stringify(allFunctions, null, 2))
 
 
 

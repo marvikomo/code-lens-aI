@@ -11,12 +11,11 @@ import { RelationshipType } from '../enum/RelationshipType'
 
 export class FunctionExtractor extends Extractor {
   constructor(
-    dbClient: Neo4jClient,
     treeSitterUtil: TreeSitterUtil,
     vectorStore: CodeVectorStore,
     graph: Graph,
   ) {
-    super(dbClient, treeSitterUtil, vectorStore, graph)
+    super(treeSitterUtil, vectorStore, graph)
   }
 
   /**

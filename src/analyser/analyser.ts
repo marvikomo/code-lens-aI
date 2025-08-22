@@ -40,9 +40,10 @@ import { getLSPClient } from '../language-server/index'
 
 import { CodeVectorStore } from '../vector-store'
 import { ModuleLEvelExtractor } from '../extractor/module-level-extractor'
+import { Indexer, Neo4jConfig } from '../indexer'
+import { GraphEmbedding } from '../indexer/graph-embedding'
 
 export class CodeAnalyzer {
-
   private graph: Graph
   private functionExtractor: Extractor
   private classExtractor: Extractor
@@ -58,9 +59,13 @@ export class CodeAnalyzer {
   private registry: LanguageRegistry
   private treeSitterUtil: TreeSitterUtil
 
+  private indexer: Indexer
+
   private vectorStore: CodeVectorStore
 
-  constructor(dbClient: Neo4jClient, languageRegistry: LanguageRegistry) {
+  private embeddings: GraphEmbedding
+
+  constructor(neo4jConfig: Neo4jConfig, languageRegistry: LanguageRegistry) {
     this.jsParser.setLanguage(JavaScript as TreeSitterLanguage)
 
     this.treeSitterUtil = new TreeSitterUtil()
@@ -81,50 +86,44 @@ export class CodeAnalyzer {
       },
     })
 
+    this.embeddings = new GraphEmbedding(this.graph)
 
     this.functionExtractor = new FunctionExtractor(
-      dbClient,
       this.treeSitterUtil,
       this.vectorStore,
       this.graph,
     )
     this.classExtractor = new ClassExtractor(
-      dbClient,
       this.treeSitterUtil,
       this.vectorStore,
       this.graph,
     )
     this.importExtractor = new ImportExtractor(
-      dbClient,
       this.treeSitterUtil,
       this.vectorStore,
       this.graph,
     )
     this.exportExtractor = new ExportExtractor(
-      dbClient,
       this.treeSitterUtil,
       this.vectorStore,
       this.graph,
     )
-    this.classExtractor = new ClassExtractor(
-      dbClient,
-      this.treeSitterUtil,
-      this.vectorStore,
-      this.graph,
-    )
+
     this.callExtractor = new CallExtractor(this.graph)
     this.variableExtractor = new VariableExtractor(
-      dbClient,
       this.treeSitterUtil,
       this.vectorStore,
       this.graph,
     )
-    this.moduleLevelExtractor = new ModuleLEvelExtractor( dbClient,
+    this.moduleLevelExtractor = new ModuleLEvelExtractor(
       this.treeSitterUtil,
       this.vectorStore,
-      this.graph)
+      this.graph,
+    )
 
     this.parser = new TreeSitterParser(this.registry)
+
+    this.indexer = new Indexer(neo4jConfig)
   }
 
   public async analyze(
@@ -227,17 +226,26 @@ export class CodeAnalyzer {
         const callQuery = this.registry.get(language).queries.calls
         const variableQuery = this.registry.get(language).queries.variables
 
-        //await this.importExtractor.extract(tree, content, filePath, importQuery, files);
+        const moduleId = `mod:${filePath}`
+        this.graph.setNode(moduleId, { type: 'module', path: filePath })
 
-        // await this.functionExtractor.extract(
-        //   tree,
-        //   content,
-        //   filePath,
-        //   functionQuery,
-        //   client,
-        // )
+        await this.importExtractor.extract(
+          tree,
+          content,
+          filePath,
+          importQuery,
+          files,
+        )
 
-        // await this.classExtractor.extract(tree, content, filePath, classQuery);
+        await this.functionExtractor.extract(
+          tree,
+          content,
+          filePath,
+          functionQuery,
+          client,
+        )
+
+        await this.classExtractor.extract(tree, content, filePath, classQuery)
 
         await this.moduleLevelExtractor.extract(
           tree,
@@ -258,14 +266,26 @@ export class CodeAnalyzer {
         // this.extractCalls(parsedFile);
       }
 
-    //   for (const filePath of files) {
-    //     await this.callExtractor.extract(filePath, client)
-    //   }
+      for (const filePath of files) {
+        await this.callExtractor.extract(filePath, client)
+      }
+
+      // await this.indexer.indexGraph(this.graph)
+      // console.log('All nodes indexed to Neo4j successfully')
+
+      console.log('🔮 Generating embeddings...')
+      await this.embeddings.generateAllEmbeddings({
+        includeRelationships: true,
+        includeCode: true,
+        includeSignature: true,
+        includeContext: true,
+        maxContextLength: 1500,
+      })
+      
     } catch (error) {
       console.error('Error during analysis:', error)
     } finally {
       client.shutdown()
     }
   }
-
 }

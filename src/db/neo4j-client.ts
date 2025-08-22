@@ -2,6 +2,21 @@ import neo4j, { Driver, Session, Result } from 'neo4j-driver';
 import { DbSchema } from './schema';
 
 export class Neo4jClient {
+  /**
+   * Upsert (create or update) a node in Neo4j with all properties
+   */
+  async upsertNode(node: Record<string, any>): Promise<void> {
+    const session = this.getSession();
+    try {
+      // Use 'Node' as a generic label, or customize as needed
+      const label = node.type ? node.type.charAt(0).toUpperCase() + node.type.slice(1) : 'Node';
+      const cypher = `MERGE (n:${label} { nodeId: $nodeId }) SET n += $props`;
+      const props = { ...node };
+      await session.run(cypher, { nodeId: node.nodeId, props });
+    } finally {
+      session.close();
+    }
+  }
   private driver: Driver | null = null;
   
   constructor(
