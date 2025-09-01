@@ -37,8 +37,8 @@ export class TreeSitterParser {
     public async parseFile(filePath: string): Promise<any> {
         const language = this.langRegistry.detect(filePath);
         if (!language) {
-            console.warn(`Unsupported file type: ${filePath}`);
-            return;
+            console.log(`Unsupported file type: ${filePath}`);
+            return null;
         }
         const content = fs.readFileSync(filePath, 'utf8');
 

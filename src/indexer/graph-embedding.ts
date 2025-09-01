@@ -1,6 +1,7 @@
 import { Graph } from 'graphlib'
 import { GraphUtil } from '../util/graph-utils'
 import { OpenAIEmbeddings } from '@langchain/openai'
+import { ParallelBatchProcessor } from '../batcher/batch-processor'
 
 export interface NodeEmbedding {
   nodeId: string
@@ -66,24 +67,95 @@ export class GraphEmbedding {
     const nodes = this.graph.nodes()
     console.log(`📊 Found ${nodes.length} nodes to process`)
 
-    let processed = 0
-    for (const nodeId of nodes) {
-      try {
-        await this.generateNodeEmbedding(nodeId, config)
-        processed++
-
-        if (processed % 10 === 0) {
-          console.log(`✅ Processed ${processed}/${nodes.length} nodes`)
-        }
-      } catch (error) {
-        console.error(
-          `❌ Failed to generate embedding for node ${nodeId}:`,
-          error,
-        )
-      }
+    if (nodes.length === 0) {
+      console.log('No nodes to process')
+      return
     }
 
-    console.log(`✅ Completed embedding generation for ${processed} nodes`)
+    // Define the batch processor function
+    const processEmbeddingBatch = async (
+      nodeBatch: string[],
+      batchIndex: number,
+    ) => {
+      const batchResults = []
+
+      for (const nodeId of nodeBatch) {
+        try {
+          await this.generateNodeEmbedding(nodeId, config)
+          batchResults.push({ nodeId, success: true })
+        } catch (error) {
+          console.error(
+            `❌ Failed to generate embedding for node ${nodeId}:`,
+            error,
+          )
+          batchResults.push({
+            nodeId,
+            success: false,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
+      }
+
+      return batchResults
+    }
+
+    // Process nodes in parallel batches
+    const result = await ParallelBatchProcessor.processInChunks(
+      nodes,
+      10, // Batch size: 10 nodes per batch
+      processEmbeddingBatch,
+      {
+        concurrency: 3, // Process 3 batches simultaneously
+        stopOnError: false, // Continue processing even if some batches fail
+        onProgress: (completed, total) => {
+          const percentage = Math.round((completed / total) * 100)
+          console.log(
+            `📊 Progress: ${percentage}% (${completed}/${total} batches completed)`,
+          )
+        },
+        onBatchComplete: (batchIndex, batchResults) => {
+          const successful = batchResults.filter((r) => r.success).length
+          const failed = batchResults.filter((r) => !r.success).length
+          console.log(
+            `✅ Batch ${
+              batchIndex + 1
+            } complete: ${successful} success, ${failed} failed`,
+          )
+        },
+        onBatchError: (batchIndex, error, batch) => {
+          console.error(
+            `❌ Entire batch ${batchIndex + 1} failed:`,
+            error.message,
+          )
+          console.error(`   Affected nodes: ${batch.join(', ')}`)
+        },
+      },
+    )
+
+    const allResults = result.results.flat()
+    const successCount = allResults.filter((r) => r.success).length
+    const failedCount = allResults.filter((r) => !r.success).length
+
+    console.log(`✅ Parallel embedding generation complete!`)
+    console.log(`   📈 Successfully processed: ${successCount} nodes`)
+    console.log(`   ❌ Failed: ${failedCount} nodes`)
+    console.log(`   ⏱️  Total time: ${result.processingTime}ms`)
+    console.log(
+      `   🚀 Processed ${result.totalBatches} batches with ${result.errorCount} batch errors`,
+    )
+
+    // Optionally, log failed nodes for debugging
+    if (failedCount > 0) {
+      const failedNodes = allResults.filter((r) => !r.success)
+      console.warn(
+        `⚠️  Failed nodes:`,
+        failedNodes.map((f) => f.nodeId),
+      )
+    }
+  }
+
+  async generateEmbedding(text: string): Promise<number[]> {
+    return this.embeddings.embedQuery(text)
   }
 
   /**
@@ -98,13 +170,18 @@ export class GraphEmbedding {
       console.warn(`Node ${nodeId} not found in graph`)
       return
     }
+      let contextText: string
+       let embedding: number[]
 
-    // Build context text for embedding
-    const contextText = this.buildNodeContext(nodeId, nodeData, options)
-    console.log(`Context for node ${nodeId}:\n`, contextText)
-
-    // Generate embedding
-    const embedding = await this.embeddings.embedQuery(contextText)
+    if(nodeData.inference) {
+        contextText = this.buildInferenceContext(nodeId, nodeData)
+        console.log("embedding context", contextText)
+        embedding = await this.embeddings.embedQuery(contextText)
+    }else {
+      contextText = this.buildNodeContext(nodeId, nodeData, options)
+      embedding = await this.embeddings.embedQuery(contextText)
+    }
+    
 
     // Update node with embedding
     this.graph.setNode(nodeId, {
@@ -162,6 +239,30 @@ export class GraphEmbedding {
       ? fullContext.substring(0, options.maxContextLength) + '...'
       : fullContext
   }
+
+
+  private buildInferenceContext(nodeId: string, nodeData: any, options?: EmbeddingOptions): string {
+    console.log("Creating inference context for node", nodeId)
+  const inference = nodeData.inference
+  const parts = [
+    `Type: ${nodeData.type}`,
+    `Name: ${nodeData.name || 'unnamed'}`,
+    `Purpose: ${inference.purpose}`,
+    `Importance: ${inference.importance}`,
+    `Business Value: ${inference.businessValue}`,
+    `Code Insights: ${inference.codeInsights}`,
+    `Relationships: ${inference.relationships}`
+  ]
+
+  const fullContext = parts.join('\n\n')
+
+  if(!options?.maxContextLength) {
+    return fullContext
+  }
+  return fullContext.length > options.maxContextLength
+    ? fullContext.substring(0, options.maxContextLength) + '...'
+    : fullContext
+}
 
   /**
    * Get relationship information for a node

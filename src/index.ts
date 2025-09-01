@@ -4,6 +4,7 @@ import { CodeAnalyzer } from './analyser/analyser'
 import { LanguageRegistry } from './languages/language-registry'
 import { Config } from './config'
 
+
 async function main() {
   try {
     console.log('config', Config)
@@ -26,18 +27,20 @@ async function main() {
 
     // Initialize language registry
     const languageRegistry = new LanguageRegistry()
+    
 
     // Initialize and run analyzer
     const analyzer = new CodeAnalyzer(neo4jConfig, languageRegistry)
+   // await analyzer.cloneRepo('https://github.com/actuallymentor/battery', './repo')
     const directoryToAnalyze =
-      '/Users/ikponmwosaomorisiagbon/MySites/code-lens-aI/test-dir/codebase'
+      '/Users/ikponmwosaomorisiagbon/MySites/code-lens-aI/repo'
 
     await analyzer.analyze(directoryToAnalyze, {
       ignoreDirs: ['node_modules', '.git'],
       ignoreFiles: ['package-lock.json'],
     })
 
-   // await neo4jClient.close()
+   //await neo4jClient.close()
     console.log('Analysis complete!')
   } catch (error) {
     console.error('Error during analysis:', error)

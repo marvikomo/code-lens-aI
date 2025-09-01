@@ -2,6 +2,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import Parser from 'tree-sitter'
 import JavaScript from 'tree-sitter-javascript'
+import simpleGit from 'simple-git'
 
 import { Neo4jClient } from '../db/neo4j-client'
 
@@ -42,6 +43,9 @@ import { CodeVectorStore } from '../vector-store'
 import { ModuleLEvelExtractor } from '../extractor/module-level-extractor'
 import { Indexer, Neo4jConfig } from '../indexer'
 import { GraphEmbedding } from '../indexer/graph-embedding'
+import { LLMModels } from '../langchain/model'
+import { LLMService } from '../langchain'
+import { NodeInference } from '../indexer/node-inference'
 
 export class CodeAnalyzer {
   private graph: Graph
@@ -65,6 +69,12 @@ export class CodeAnalyzer {
 
   private embeddings: GraphEmbedding
 
+  private llmModel: LLMModels
+
+  private llmService: LLMService
+
+  private nodeInference: NodeInference
+
   constructor(neo4jConfig: Neo4jConfig, languageRegistry: LanguageRegistry) {
     this.jsParser.setLanguage(JavaScript as TreeSitterLanguage)
 
@@ -85,6 +95,10 @@ export class CodeAnalyzer {
         variables: createQuery(JavaScript as TreeSitterLanguage, VariableQuery),
       },
     })
+
+    this.llmModel = new LLMModels()
+
+    this.llmService = new LLMService(this.graph)
 
     this.embeddings = new GraphEmbedding(this.graph)
 
@@ -124,22 +138,31 @@ export class CodeAnalyzer {
     this.parser = new TreeSitterParser(this.registry)
 
     this.indexer = new Indexer(neo4jConfig)
+
+    this.nodeInference = new NodeInference(this.graph, this.llmService)
   }
 
-  public async analyze(
-    directoryPath: string,
-    options: { ignoreDirs?: string[]; ignoreFiles?: string[] } = {},
-  ): Promise<void> {
-    //('Analyzing dir:', directoryPath);
+  private async collectAllFiles(directory: string) {
+    //console.log('Collecting files in dir1:', directory);
+    const files: any = []
 
-    const client = getLSPClient('typescript')
+    const collectFilesRecursive = (dir: string): void => {
+      //console.log('Collecting files in dir:', dir);
+      const entries = fs.readdirSync(dir, { withFileTypes: true })
 
-    const files = await this.collectFiles(directoryPath, options)
-    await this.performAnalysis(files)
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name)
 
-    // console.log('parsed files', this.parsedFiles)
+        if (entry.isDirectory()) {
+          collectFilesRecursive(fullPath)
+        } else if (entry.isFile()) {
+          files.push(fullPath)
+        }
+      }
+    }
 
-    // console.log('Files collected:', files);
+    collectFilesRecursive(directory)
+    return files
   }
 
   private async collectFiles(
@@ -185,10 +208,7 @@ export class CodeAnalyzer {
           }
         } else if (entry.isFile()) {
           if (!ignoredFiles.has(entry.name)) {
-            const language = this.registry.detect(fullPath)
-            if (language) {
-              files.push(fullPath)
-            }
+            files.push(fullPath)
           }
         }
       }
@@ -198,26 +218,114 @@ export class CodeAnalyzer {
     return files
   }
 
+  async cloneRepo(repoUrl: string, localPath: string): Promise<string> {
+    // Extract repo name from URL
+    const match = repoUrl.match(/\/([^\/]+)\/?$/)
+    const repoName = match ? match[1].replace(/\.git$/, '') : 'repo'
+    const targetPath = path.join(localPath, repoName)
+    const git = simpleGit()
+    if (fs.existsSync(targetPath)) {
+      // If already exists, pull latest changes
+      await git.cwd(targetPath).pull()
+    } else {
+      await git.clone(repoUrl, targetPath)
+    }
+    return targetPath
+  }
+
+  public async analyze(
+    directoryPath: string,
+    options: { ignoreDirs?: string[]; ignoreFiles?: string[] } = {},
+  ): Promise<void> {
+    //('Analyzing dir:', directoryPath);
+
+  //   const client = getLSPClient('typescript')
+
+  //   const files = await this.collectFiles(directoryPath, options)
+  //   await this.performAnalysis(files, directoryPath)
+
+  //   const docFiles = await this.llmService.identifyDocFiles(files)
+  //   console.log('doc files', docFiles)
+
+  //   const projectDescription = await this.llmService.getProjectDescription(
+  //     docFiles.documentationFiles,
+  //   )
+  //   // console.log('project description', projectDescription)
+
+  //   const nodes = await this.llmService.selectTopNodesFromAllModules(
+  //     docFiles.documentationFiles,
+  //     projectDescription,
+  //   )
+
+  //   console.log('selected nodes', nodes)
+
+  //   await this.nodeInference.processSelectedNodes(nodes, projectDescription)
+
+  //   for (const nodeId of this.graph.nodes()) {
+  //     const nodeData = this.graph.node(nodeId)
+  //     if (nodeData && nodeData?.type === 'function') {
+  //       console.log('function nodes', nodeData)
+  //     }
+  //   }
+
+  //   // await this.indexer.indexGraph(this.graph)
+  //   // console.log('All nodes indexed to Neo4j successfully')
+
+  //     console.log('🔮 Generating embeddings...')
+  //   await this.embeddings.generateAllEmbeddings({
+  //     includeRelationships: true,
+  //     includeCode: true,
+  //     includeSignature: true,
+  //     includeContext: true,
+  //     maxContextLength: 1500,
+  //   })
+
+  //  await this.indexer.indexGraph(this.graph)
+
+     let vector = await this.embeddings.generateEmbedding("how is the implemtation for permission")
+
+     const result = await this.indexer.searchSimilarNodes(vector, 15)
+     console.log("search result", result)
+
+    // console.log('parsed files', this.parsedFiles)
+
+    // console.log('Files collected:', files);
+  }
+
   /**
    * Perform static AST analysis on files
    * @param files Array of file paths
    * @private
    */
 
-  private async performAnalysis(files: string[]): Promise<void> {
-    console.log('Starting static AST analysis phase...', files)
-    const client = new TypeScriptLSPClient('test-dir/codebase')
+  private async performAnalysis(
+    files: string[],
+    directoryPath: string,
+  ): Promise<void> {
+    console.log('Starting static AST analysis phase...')
+    console.log('directory path', directoryPath)
+    const client = new TypeScriptLSPClient(directoryPath)
     try {
-      client.start()
+      await client.start()
 
-      client.openAllProjectFiles(files)
+      await client.openAllProjectFiles(files)
+      console.log('LSP client started and files opened.')
       // Analyze parsed files
       for (const filePath of files) {
-        const { language, tree, content } = await this.parser.parseFile(
-          filePath,
-        )
+        const parseResult = await this.parser.parseFile(filePath)
+
+        if (!parseResult) {
+          continue // Skip unsupported files
+        }
+
+        const { language, tree, content } = parseResult
+        console.log('herezz')
+
+        if (!language) continue
 
         //const parsedFile = this.parsedFiles.get(filePath)!;
+
+        console.log('here')
 
         const functionQuery = this.registry.get(language).queries.functions
         const classQuery = this.registry.get(language).queries.classes
@@ -265,23 +373,10 @@ export class CodeAnalyzer {
         // // Extract function calls
         // this.extractCalls(parsedFile);
       }
-
+      console.log('Static AST analysis phase complete!')
       for (const filePath of files) {
         await this.callExtractor.extract(filePath, client)
       }
-
-      // await this.indexer.indexGraph(this.graph)
-      // console.log('All nodes indexed to Neo4j successfully')
-
-      console.log('🔮 Generating embeddings...')
-      await this.embeddings.generateAllEmbeddings({
-        includeRelationships: true,
-        includeCode: true,
-        includeSignature: true,
-        includeContext: true,
-        maxContextLength: 1500,
-      })
-      
     } catch (error) {
       console.error('Error during analysis:', error)
     } finally {

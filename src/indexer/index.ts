@@ -44,22 +44,22 @@ export class Indexer {
    */
   private async createUnifiedVectorIndex(): Promise<void> {
     const session = this.driver.session()
-    
+
     try {
       console.log('📊 Creating unified vector index on NODE base label...')
-      
+
       await session.run(`
         CREATE VECTOR INDEX unified_node_embeddings FOR (n:NODE) ON (n.embedding)
         OPTIONS {indexConfig: {
-          \`vector.dimensions\`: 384,
+          \`vector.dimensions\`: 1536,
           \`vector.similarity_function\`: 'cosine'
         }}
       `)
-      
+
       // Also create supporting indexes
       await session.run('CREATE INDEX node_types FOR (n:NODE) ON (n.type)')
       await session.run('CREATE INDEX node_names FOR (n:NODE) ON (n.name)')
-      
+
       console.log('✅ Vector and supporting indexes created')
     } catch (error) {
       console.log('💡 Indexes may already exist:', error.message)
@@ -105,7 +105,7 @@ export class Indexer {
     try {
       // Group nodes by type for more efficient batch operations
       const nodesByType = this.groupNodesByType(nodeDataArray)
-      
+
       for (const [nodeType, nodes] of Object.entries(nodesByType)) {
         await this.createNodesOfTypeBatch(tx, nodeType, nodes)
       }
@@ -137,11 +137,11 @@ export class Indexer {
   private async createNodesOfTypeBatch(
     tx: any,
     nodeType: string,
-    nodes: any[]
+    nodes: any[],
   ): Promise<void> {
     // Prepare node data for batch creation
-    const batchData = nodes.map(nodeData => {
-      const { nodeId, type, embedding, ...properties } = nodeData
+    const batchData = nodes.map((nodeData) => {
+      const { nodeId, type, embedding, inference, ...properties } = nodeData
 
       const validProperties = Object.entries(properties).reduce(
         (acc, [key, value]) => {
@@ -159,25 +159,48 @@ export class Indexer {
         {} as any,
       )
 
+      if (inference) {
+        console.log("node inference", {
+          name: nodeData?.name,
+          type: nodeData?.type,
+          rowStart: nodeData?.rowStart,
+          definedIn: nodeData?.definedIn,
+        })
+        
+        validProperties.inference_purpose = inference.purpose
+        validProperties.inference_importance = inference.importance
+        validProperties.inference_relationships = inference.relationships
+        validProperties.inference_codeInsights = inference.codeInsights
+        validProperties.inference_businessValue = inference.businessValue
+        validProperties.inference_processedAt = inference.processedAt
+      }
+
       return {
         nodeId,
-        embedding: embedding && Array.isArray(embedding) && embedding.length > 0 ? embedding : null,
-        properties: validProperties
+        embedding:
+          embedding && Array.isArray(embedding) && embedding.length > 0
+            ? embedding
+            : null,
+        properties: validProperties,
       }
     })
 
     // Create Cypher query with NODE + specific type labels
     const labels = `:NODE:${nodeType}`
-    
+
     const cypher = `
       UNWIND $batchData as item
       MERGE (n${labels} {id: item.nodeId})
       SET n += item.properties
-      ${batchData.some(item => item.embedding) ? 'SET n.embedding = CASE WHEN item.embedding IS NOT NULL THEN item.embedding ELSE n.embedding END' : ''}
+      ${
+        batchData.some((item) => item.embedding)
+          ? 'SET n.embedding = CASE WHEN item.embedding IS NOT NULL THEN item.embedding ELSE n.embedding END'
+          : ''
+      }
     `
 
     await tx.run(cypher, { batchData })
-    
+
     console.log(`📝 Created ${nodes.length} nodes with labels NODE:${nodeType}`)
   }
 
@@ -269,39 +292,40 @@ export class Indexer {
    * Query methods for the unified NODE structure
    */
   async searchSimilarNodes(
-    queryVector: number[], 
+    queryVector: number[],
     limit: number = 10,
-    nodeTypes?: string[]
+    nodeTypes?: string[],
   ): Promise<any[]> {
     const session = this.driver.session()
-    
+
     try {
       let cypher = `
         CALL db.index.vector.queryNodes('unified_node_embeddings', $limit, $queryVector)
         YIELD node, score
       `
-      
+
       const params: any = { limit, queryVector }
-      
+
       if (nodeTypes && nodeTypes.length > 0) {
-        const typeConditions = nodeTypes.map(type => `node:${this.capitalizeFirst(type)}`).join(' OR ')
+        const typeConditions = nodeTypes
+          .map((type) => `node:${this.capitalizeFirst(type)}`)
+          .join(' OR ')
         cypher += ` WHERE ${typeConditions}`
       }
-      
+
       cypher += `
         RETURN node, score, 
                [label IN labels(node) WHERE label <> 'NODE'][0] as nodeType
         ORDER BY score DESC
       `
-      
+
       const result = await session.run(cypher, params)
-      
-      return result.records.map(record => ({
+
+      return result.records.map((record) => ({
         node: record.get('node').properties,
         score: record.get('score'),
-        nodeType: record.get('nodeType')
+        nodeType: record.get('nodeType'),
       }))
-      
     } finally {
       await session.close()
     }
@@ -309,13 +333,13 @@ export class Indexer {
 
   async getNodesByType(nodeType: string): Promise<any[]> {
     const session = this.driver.session()
-    
+
     try {
       const result = await session.run(
-        `MATCH (n:NODE:${this.capitalizeFirst(nodeType)}) RETURN n LIMIT 100`
+        `MATCH (n:NODE:${this.capitalizeFirst(nodeType)}) RETURN n LIMIT 100`,
       )
-      
-      return result.records.map(record => record.get('n').properties)
+
+      return result.records.map((record) => record.get('n').properties)
     } finally {
       await session.close()
     }
@@ -323,7 +347,7 @@ export class Indexer {
 
   async validateNodeLabeling(): Promise<void> {
     const session = this.driver.session()
-    
+
     try {
       // Check that all nodes have NODE label
       const result = await session.run(`
@@ -331,15 +355,15 @@ export class Indexer {
         WHERE NOT n:NODE 
         RETURN count(n) as nodesWithoutBaseLabel
       `)
-      
+
       const count = result.records[0].get('nodesWithoutBaseLabel').toNumber()
-      
+
       if (count > 0) {
         console.warn(`⚠️  Found ${count} nodes without NODE base label`)
       } else {
         console.log('✅ All nodes have proper NODE base labeling')
       }
-      
+
       // Show label distribution
       const labelResult = await session.run(`
         MATCH (n:NODE)
@@ -348,12 +372,11 @@ export class Indexer {
         RETURN label as nodeType, count(*) as count
         ORDER BY count DESC
       `)
-      
+
       console.log('📊 Node type distribution:')
-      labelResult.records.forEach(record => {
+      labelResult.records.forEach((record) => {
         console.log(`  ${record.get('nodeType')}: ${record.get('count')}`)
       })
-      
     } finally {
       await session.close()
     }

@@ -1,6 +1,19 @@
 import { Graph } from 'graphlib'
 import { RelationshipType } from '../enum/RelationshipType'
 
+interface NodeGroup {
+  nodes: string[]
+  moduleId: string
+  filePath: string
+}
+
+interface SelectedNodeGroup {
+  selectedNodes: string[]
+  reasons: Record<string, string>
+  moduleId: string
+  filePath: string
+}
+
 export class GraphUtil {
   //we need to have a constructor to initialize the graph
   constructor(private graph: Graph) {}
@@ -441,6 +454,202 @@ export class GraphUtil {
       )
     } catch (error) {
       console.error('Error creating call relationship:', error)
+    }
+  }
+
+  public groupNodesByModule(): NodeGroup[] {
+    const groups = new Map<string, NodeGroup>()
+
+    // Get all non-module nodes
+    const nodes = this.graph.nodes().filter((nodeId) => {
+      const nodeData = this.graph.node(nodeId)
+      return nodeData && nodeData.type !== 'module'
+    })
+
+    for (const nodeId of nodes) {
+      const nodeData = this.graph.node(nodeId)
+      if (!nodeData?.moduleDefinedIn) continue
+
+      const moduleId = `mod:${nodeData.moduleDefinedIn}`
+
+      if (!groups.has(moduleId)) {
+        groups.set(moduleId, {
+          nodes: [],
+          moduleId,
+          filePath: nodeData.moduleDefinedIn,
+        })
+      }
+
+      groups.get(moduleId)!.nodes.push(nodeId)
+    }
+
+    return Array.from(groups.values()).filter((group) => group.nodes.length > 0)
+  }
+
+   public buildSignaturesContext(nodeIds: string[]): string {
+    const nodeContexts = nodeIds.map(nodeId => {
+      const nodeData = this.graph.node(nodeId)
+      if (!nodeData) return null
+
+      const parts = [
+        `ID: ${nodeId}`,
+        `Type: ${nodeData.type}`,
+        `Name: ${nodeData.name || 'unnamed'}`
+      ]
+
+      if (nodeData.signature) {
+        parts.push(`Signature: ${nodeData.signature}`)
+      }
+
+      // Add relationship summary
+      const relationships = this.getNodeRelationshipsSummary(nodeId)
+      if (relationships) {
+        parts.push(`Relationships: ${relationships}`)
+      }
+
+      return parts.join('\n')
+    }).filter(Boolean)
+
+    return nodeContexts.join('\n---\n')
+  }
+
+   private buildSelectionContext(group: SelectedNodeGroup): string {
+    const reasonsList = Object.entries(group.reasons)
+      .map(([nodeId, reason]) => {
+        const nodeData = this.graph.node(nodeId)
+        const nodeName = nodeData?.name || nodeId
+        return `- ${nodeName}: ${reason}`
+      })
+      .join('\n')
+
+    return `Why these nodes were selected:\n${reasonsList}`
+  }
+
+  public buildDetailedNodesContext(nodeIds: string[]): string {
+    const nodeContexts = nodeIds.map(nodeId => {
+      const nodeData = this.graph.node(nodeId)
+      if (!nodeData) return null
+
+      const parts = [
+        `=== Node: ${nodeId} ===`,
+        `Type: ${nodeData.type}`,
+        `Name: ${nodeData.name || 'unnamed'}`
+      ]
+
+      if (nodeData.signature) {
+        parts.push(`Signature: ${nodeData.signature}`)
+      }
+
+      // Include code for better analysis
+      if (nodeData.code) {
+        const code = nodeData.code.length > 800 
+          ? nodeData.code.substring(0, 800) + '...[truncated]'
+          : nodeData.code
+        parts.push(`Code:\n${code}`)
+      }
+
+      // Add detailed relationships
+      const relationships = this.getDetailedRelationships(nodeId)
+      if (relationships.length > 0) {
+        parts.push(`Relationships:\n${relationships.join('\n')}`)
+      }
+
+      // Add scope information
+      if (nodeData.scopeDefinedIn) {
+        parts.push(`Scope: ${nodeData.scopeDefinedIn}`)
+      }
+
+      // Add calls information for functions
+      if (nodeData.calls) {
+        try {
+          const calls = JSON.parse(nodeData.calls)
+          if (calls.length > 0) {
+            const callNames = calls.slice(0, 5).map((c: any) => c.name || 'unnamed').join(', ')
+            parts.push(`Calls: ${callNames}`)
+          }
+        } catch (e) {
+          // Ignore parsing errors
+        }
+      }
+
+      return parts.join('\n')
+    }).filter(Boolean)
+
+    return nodeContexts.join('\n\n')
+  }
+
+   private getDetailedRelationships(nodeId: string): string[] {
+    const relationships: string[] = []
+
+    // Outgoing relationships
+    const outEdges = this.graph.outEdges(nodeId) || []
+    for (const edge of outEdges) {
+      const targetNode = this.graph.node(edge.w)
+      const edgeData = this.graph.edge(edge)
+      
+      if (targetNode && edgeData) {
+        relationships.push(`  → ${edgeData.type}: ${targetNode.name || targetNode.type}`)
+      }
+    }
+
+    // Incoming relationships
+    const inEdges = this.graph.inEdges(nodeId) || []
+    for (const edge of inEdges) {
+      const sourceNode = this.graph.node(edge.v)
+      const edgeData = this.graph.edge(edge)
+      
+      if (sourceNode && edgeData) {
+        relationships.push(`  ← ${edgeData.type}: ${sourceNode.name || sourceNode.type}`)
+      }
+    }
+
+    return relationships.slice(0, 8) // Limit to prevent context explosion
+  }
+
+
+   private getNodeRelationshipsSummary(nodeId: string): string {
+    const outEdges = this.graph.outEdges(nodeId) || []
+    const inEdges = this.graph.inEdges(nodeId) || []
+    
+    const relationships = []
+    
+    if (inEdges.length > 0) {
+      relationships.push(`${inEdges.length} incoming`)
+    }
+    
+    if (outEdges.length > 0) {
+      relationships.push(`${outEdges.length} outgoing`)
+    }
+
+    // Add key relationship types
+    const relationshipTypes = [
+      ...outEdges.map(e => this.graph.edge(e)?.type).filter(Boolean),
+      ...inEdges.map(e => this.graph.edge(e)?.type).filter(Boolean)
+    ]
+
+    const uniqueTypes = [...new Set(relationshipTypes)].slice(0, 3)
+    if (uniqueTypes.length > 0) {
+      relationships.push(`types: ${uniqueTypes.join(', ')}`)
+    }
+
+    return relationships.join(', ')
+  }
+
+  public updateNodeWithInference(analysis: any): void {
+    console.log("updating node with inference", analysis.nodeId)
+    const existingData = this.graph.node(analysis.nodeId)
+    if (existingData) {
+      this.graph.setNode(analysis.nodeId, {
+        ...existingData,
+        inference: {
+          purpose: analysis.purpose,
+          importance: analysis.importance,
+          relationships: analysis.relationships,
+          codeInsights: analysis.codeInsights,
+          businessValue: analysis.businessValue,
+          processedAt: new Date().toISOString()
+        }
+      })
     }
   }
 }
