@@ -52,7 +52,13 @@ export class JsTsExtractor implements LanguageExtractor {
             const spec = stripQuotes(arg.text);
             ctx.pendingImports.push({ from: ctx.fileNode.id, spec });
           }
+          break;
         }
+
+        // Anonymous arrow / function-expression arguments become Function nodes
+        // ("handlers"). Critical for Express/Koa/Fastify-style routers where the
+        // real logic lives inside `router.post("/x", async (req, res) => {...})`.
+        this.captureHandlerArgs(node, ctx);
         break;
       }
 
@@ -309,6 +315,45 @@ export class JsTsExtractor implements LanguageExtractor {
     }
   }
 
+  private captureHandlerArgs(callNode: SyntaxNode, ctx: ExtractContext): void {
+    const args = callNode.childForFieldName("arguments");
+    if (!args) return;
+    const handlers = args.namedChildren.filter(
+      (c) =>
+        c.type === "arrow_function" ||
+        c.type === "function_expression" ||
+        c.type === "function",
+    );
+    if (handlers.length === 0) return;
+
+    const fn = callNode.childForFieldName("function");
+    const calleeLabel = fn ? handlerLabelFor(fn) : "<call>";
+    const firstString = args.namedChildren.find((c) => c.type === "string");
+    const tag = firstString ? stripQuotes(firstString.text) : null;
+
+    handlers.forEach((arg, idx) => {
+      const suffix = handlers.length > 1 ? `#${idx}` : "";
+      const name = tag
+        ? `<${calleeLabel}:"${tag}">${suffix}`
+        : `<${calleeLabel}@${arg.startPosition.row}>${suffix}`;
+      const id = `${ctx.fileNode.id}#handler:${calleeLabel}@${arg.startPosition.row}:${arg.startPosition.column}`;
+      const handler = ctx.builder.addNode({
+        id,
+        kind: "Function",
+        name,
+        path: ctx.filePath,
+        language: ctx.language,
+        range: rangeOf(arg),
+      });
+      ctx.builder.addEdge({
+        kind: "DEFINES",
+        from: ctx.fileNode.id,
+        to: handler.id,
+      });
+      this.collectCalls(arg, handler, ctx);
+    });
+  }
+
   private collectCalls(
     node: SyntaxNode,
     enclosing: GraphNode,
@@ -324,6 +369,16 @@ export class JsTsExtractor implements LanguageExtractor {
         (n.type === "function_declaration" ||
           n.type === "generator_function_declaration" ||
           n.type === "method_definition")
+      ) {
+        continue;
+      }
+      // Anonymous arrow / function-expression — own Function node via
+      // captureHandlerArgs (or via variable_declarator below). Skip body.
+      if (
+        n !== node &&
+        (n.type === "arrow_function" ||
+          n.type === "function_expression" ||
+          n.type === "function")
       ) {
         continue;
       }
@@ -362,6 +417,20 @@ export class JsTsExtractor implements LanguageExtractor {
       }
       for (const c of n.namedChildren) stack.push(c);
     }
+  }
+}
+
+function handlerLabelFor(fn: SyntaxNode): string {
+  switch (fn.type) {
+    case "identifier":
+      return fn.text;
+    case "member_expression": {
+      const obj = fn.childForFieldName("object")?.text ?? "?";
+      const prop = fn.childForFieldName("property")?.text ?? "?";
+      return `${obj}.${prop}`;
+    }
+    default:
+      return fn.text || "<call>";
   }
 }
 
