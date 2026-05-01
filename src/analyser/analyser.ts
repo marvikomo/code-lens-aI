@@ -1,350 +1,291 @@
-import * as fs from 'fs'
-import * as path from 'path'
-import Parser from 'tree-sitter'
-import JavaScript from 'tree-sitter-javascript'
-import simpleGit from 'simple-git'
+import fs from "fs";
+import path from "path";
+import {
+  GraphBuilder,
+  GraphNode,
+  CodeGraph,
+} from "../util/graph";
+import { detectLanguage, SupportedLanguage } from "../util/language";
+import { getParser } from "./../util/parserFactory";
+import { ExtractContext, LanguageExtractor } from "../extractor/base";
+import { JsTsExtractor } from "../extractor/jsts";
+import { JavaExtractor } from "../extractor/java";
 
-import { Neo4jClient } from '../db/neo4j-client'
-
-// Create a type for the language instance
-type TreeSitterLanguage = Parser.Language & {
-  nodeTypeInfo: any
+export interface AnalyzeOptions {
+  /** Folder/file names to ignore. Defaults to common build artefacts. */
+  ignore?: string[];
+  /** Whether to attempt to resolve unresolved CALLS to local Function/Method nodes by name. */
+  resolveCallsByName?: boolean;
 }
 
-import { createHash } from 'crypto'
+const DEFAULT_IGNORES = new Set([
+  "node_modules",
+  ".git",
+  "dist",
+  "build",
+  "out",
+  "target",
+  ".gradle",
+  ".idea",
+  ".vscode",
+  ".next",
+  "coverage",
+]);
 
-import { logger } from '../logger'
-import { FileInfo, ParsedFile } from '../interfaces/file'
-import { CallInfo, CodeEdge, CodeNode, FunctionNode } from '../interfaces/code'
-import { TreeSitterParser } from '../tree-sitter-parser'
-import { LanguageRegistry } from '../languages/language-registry'
-import { createQuery } from '../queries/create-queries'
-import {
-  CallQuery,
-  ClassQuery,
-  FunctionQuery,
-  ImportQuery,
-  VariableQuery,
-  ExportQuery,
-} from '../queries/js-query-constants'
-import { FunctionExtractor } from '../extractor/function-extractor'
-import { Extractor } from '../extractor/extractor'
-import { ClassExtractor } from '../extractor/class-extractor'
-import { ImportExtractor } from '../extractor/import-extractor'
-import { ExportExtractor } from '../extractor/export-extractor'
-import { CallExtractor } from '../extractor/call-extractor'
-import { VariableExtractor } from '../extractor/variable-extractor'
-import { TreeSitterUtil } from '../util/tree-sitter-util'
-import { Graph } from 'graphlib'
-import { TypeScriptLSPClient } from '../language-server/typescript-server/lsp-client'
-import { getLSPClient } from '../language-server/index'
-
-import { CodeVectorStore } from '../vector-store'
-import { ModuleLEvelExtractor } from '../extractor/module-level-extractor'
-import { Indexer, Neo4jConfig } from '../indexer'
-import { GraphEmbedding } from '../indexer/graph-embedding'
-import { LLMModels } from '../langchain/model'
-import { LLMService } from '../langchain'
-import { NodeInference } from '../indexer/node-inference'
-
-export class CodeAnalyzer {
-  private graph: Graph
-  private functionExtractor: Extractor
-  private classExtractor: Extractor
-  private importExtractor: Extractor
-  private exportExtractor: Extractor
-  private callExtractor: CallExtractor
-  private variableExtractor: Extractor
-  private moduleLevelExtractor: Extractor
-
-  private parser: TreeSitterParser
-
-  private jsParser = new Parser()
-  private registry: LanguageRegistry
-  private treeSitterUtil: TreeSitterUtil
-
-  private indexer: Indexer
-
-  private vectorStore: CodeVectorStore
-
-  private embeddings: GraphEmbedding
-
-  private llmModel: LLMModels
-
-  private llmService: LLMService
-
-  private nodeInference: NodeInference
-
-  constructor(neo4jConfig: Neo4jConfig, languageRegistry: LanguageRegistry) {
-    this.jsParser.setLanguage(JavaScript as TreeSitterLanguage)
-
-    this.treeSitterUtil = new TreeSitterUtil()
-
-    this.graph = new Graph()
-
-    this.registry = languageRegistry
-    this.registry.register('javascript', {
-      extensions: ['.js', '.jsx', '.ts', '.tsx'],
-      parser: this.jsParser,
-      queries: {
-        functions: createQuery(JavaScript as TreeSitterLanguage, FunctionQuery),
-        calls: createQuery(JavaScript as TreeSitterLanguage, CallQuery),
-        imports: createQuery(JavaScript as TreeSitterLanguage, ImportQuery),
-        exports: createQuery(JavaScript as TreeSitterLanguage, ExportQuery),
-        classes: createQuery(JavaScript as TreeSitterLanguage, ClassQuery),
-        variables: createQuery(JavaScript as TreeSitterLanguage, VariableQuery),
-      },
-    })
-
-    this.llmModel = new LLMModels()
-
-    this.llmService = new LLMService(this.graph)
-
-    this.embeddings = new GraphEmbedding(this.graph)
-
-    this.functionExtractor = new FunctionExtractor(
-      this.treeSitterUtil,
-      this.vectorStore,
-      this.graph,
-    )
-    this.classExtractor = new ClassExtractor(
-      this.treeSitterUtil,
-      this.vectorStore,
-      this.graph,
-    )
-    this.importExtractor = new ImportExtractor(
-      this.treeSitterUtil,
-      this.vectorStore,
-      this.graph,
-    )
-    this.exportExtractor = new ExportExtractor(
-      this.treeSitterUtil,
-      this.vectorStore,
-      this.graph,
-    )
-
-    this.callExtractor = new CallExtractor(this.graph)
-    this.variableExtractor = new VariableExtractor(
-      this.treeSitterUtil,
-      this.vectorStore,
-      this.graph,
-    )
-    this.moduleLevelExtractor = new ModuleLEvelExtractor(
-      this.treeSitterUtil,
-      this.vectorStore,
-      this.graph,
-    )
-
-    this.parser = new TreeSitterParser(this.registry)
-
-    this.indexer = new Indexer(neo4jConfig)
-
-    this.nodeInference = new NodeInference(this.graph, this.llmService)
+export function analyzeRepository(
+  repoPath: string,
+  opts: AnalyzeOptions = {},
+): CodeGraph {
+  const absRepo = path.resolve(repoPath);
+  const stat = fs.statSync(absRepo);
+  if (!stat.isDirectory()) {
+    throw new Error(`Not a directory: ${absRepo}`);
   }
 
-  private async collectAllFiles(directory: string) {
-    //console.log('Collecting files in dir1:', directory);
-    const files: any = []
+  const ignores = new Set([...DEFAULT_IGNORES, ...(opts.ignore ?? [])]);
+  const builder = new GraphBuilder();
 
-    const collectFilesRecursive = (dir: string): void => {
-      //console.log('Collecting files in dir:', dir);
-      const entries = fs.readdirSync(dir, { withFileTypes: true })
+  // Repository node.
+  const repoName = path.basename(absRepo);
+  const repoNode = builder.addNode({
+    id: `repo:${absRepo}`,
+    kind: "Repository",
+    name: repoName,
+    path: absRepo,
+  });
 
-      for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name)
+  // Walk filesystem.  Track folder→nodeId map so we can wire CONTAINS edges.
+  const pendingImports: ExtractContext["pendingImports"] = [];
+  const fileNodesByAbsPath = new Map<string, GraphNode>();
 
-        if (entry.isDirectory()) {
-          collectFilesRecursive(fullPath)
-        } else if (entry.isFile()) {
-          files.push(fullPath)
-        }
-      }
-    }
-
-    collectFilesRecursive(directory)
-    return files
-  }
-
-  private async collectFiles(
-    directory: string,
-    options: { ignoreDirs?: string[]; ignoreFiles?: string[] } = {},
-  ) {
-    //console.log('Collecting files in dir1:', directory);
-    const files: any = []
-
-    const ignoredDirs = new Set([
-      'node_modules',
-      '.git',
-      '.github',
-      'dist',
-      'build',
-      'target',
-      'bin',
-      'obj',
-      'out',
-      '.idea',
-      '.vscode',
-      ...(options.ignoreDirs || []),
-    ])
-
-    const ignoredFiles = new Set([
-      '.DS_Store',
-      'Thumbs.db',
-      'package-lock.json',
-      'yarn.lock',
-      ...(options.ignoreFiles || []),
-    ])
-
-    const collectFilesRecursive = (dir: string): void => {
-      //console.log('Collecting files in dir:', dir);
-      const entries = fs.readdirSync(dir, { withFileTypes: true })
-
-      for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name)
-
-        if (entry.isDirectory()) {
-          if (!ignoredDirs.has(entry.name)) {
-            collectFilesRecursive(fullPath)
-          }
-        } else if (entry.isFile()) {
-          if (!ignoredFiles.has(entry.name)) {
-            files.push(fullPath)
-          }
-        }
-      }
-    }
-
-    collectFilesRecursive(directory)
-    return files
-  }
-
-  async cloneRepo(repoUrl: string, localPath: string): Promise<string> {
-    // Extract repo name from URL
-    const match = repoUrl.match(/\/([^\/]+)\/?$/)
-    const repoName = match ? match[1].replace(/\.git$/, '') : 'repo'
-    const targetPath = path.join(localPath, repoName)
-    const git = simpleGit()
-    if (fs.existsSync(targetPath)) {
-      // If already exists, pull latest changes
-      await git.cwd(targetPath).pull()
-    } else {
-      await git.clone(repoUrl, targetPath)
-    }
-    return targetPath
-  }
-
-  public async analyze(
-    directoryPath: string,
-    options: { ignoreDirs?: string[]; ignoreFiles?: string[] } = {},
-  ): Promise<void> {
-    const files = await this.collectFiles(directoryPath, options)
-    console.log(`Found ${files.length} files`)
-
-    await this.performAnalysis(files, directoryPath)
-
-    console.log(
-      `Graph built: ${this.graph.nodes().length} nodes, ${this.graph.edges().length} edges`,
-    )
-
-    await this.indexer.indexGraph(this.graph)
-    console.log('Indexed graph to Neo4j')
-  }
-
-  /**
-   * Perform static AST analysis on files
-   * @param files Array of file paths
-   * @private
-   */
-
-  private async performAnalysis(
-    files: string[],
-    directoryPath: string,
-  ): Promise<void> {
-    console.log('Starting static AST analysis phase...')
-    console.log('directory path', directoryPath)
-
-    // LSP disabled — using no-op stub. Re-enable for precise cross-file call resolution.
-    // const client = new TypeScriptLSPClient(directoryPath)
-    // await client.start()
-    // await client.openAllProjectFiles(files)
-    const client: any = {
-      getAllSymbols: async () => [],
-      getCallees: async () => [],
-      shutdown: () => {},
-    }
-
+  const walkDir = (dir: string, parentNode: GraphNode): void => {
+    let entries: fs.Dirent[];
     try {
-      // Analyze parsed files
-      for (const filePath of files) {
-        const parseResult = await this.parser.parseFile(filePath)
-
-        if (!parseResult) {
-          continue // Skip unsupported files
-        }
-
-        const { language, tree, content } = parseResult
-        console.log('herezz')
-
-        if (!language) continue
-
-        //const parsedFile = this.parsedFiles.get(filePath)!;
-
-        console.log('here')
-
-        const functionQuery = this.registry.get(language).queries.functions
-        const classQuery = this.registry.get(language).queries.classes
-        const importQuery = this.registry.get(language).queries.imports
-        const exportQuery = this.registry.get(language).queries.exports
-        const callQuery = this.registry.get(language).queries.calls
-        const variableQuery = this.registry.get(language).queries.variables
-
-        const moduleId = `mod:${filePath}`
-        this.graph.setNode(moduleId, { type: 'module', path: filePath })
-
-        await this.importExtractor.extract(
-          tree,
-          content,
-          filePath,
-          importQuery,
-          files,
-        )
-
-        await this.functionExtractor.extract(
-          tree,
-          content,
-          filePath,
-          functionQuery,
-          client,
-        )
-
-        await this.classExtractor.extract(tree, content, filePath, classQuery)
-
-        await this.moduleLevelExtractor.extract(
-          tree,
-          content,
-          filePath,
-          importQuery,
-          client,
-        )
-
-        // await this.exportExtractor.extract(tree, content, filePath, exportQuery);
-
-        // await this.variableExtractor.extract(tree, content, filePath, variableQuery);
-
-        // Extract function declarations
-        // this.extractFunctions(parsedFile);
-
-        // // Extract function calls
-        // this.extractCalls(parsedFile);
-      }
-      console.log('Static AST analysis phase complete!')
-      for (const filePath of files) {
-        await this.callExtractor.extract(filePath, client)
-      }
-    } catch (error) {
-      console.error('Error during analysis:', error)
-    } finally {
-      client.shutdown()
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
     }
+    for (const entry of entries) {
+      if (ignores.has(entry.name) || entry.name.startsWith(".")) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        const folder = builder.addNode({
+          id: `folder:${full}`,
+          kind: "Folder",
+          name: entry.name,
+          path: full,
+        });
+        builder.addEdge({
+          kind: "CONTAINS",
+          from: parentNode.id,
+          to: folder.id,
+        });
+        walkDir(full, folder);
+      } else if (entry.isFile()) {
+        const lang = detectLanguage(full);
+        if (!lang) continue;
+        const fileNode = builder.addNode({
+          id: `file:${full}`,
+          kind: "File",
+          name: entry.name,
+          path: full,
+          language: lang,
+        });
+        builder.addEdge({
+          kind: "CONTAINS",
+          from: parentNode.id,
+          to: fileNode.id,
+        });
+        fileNodesByAbsPath.set(full, fileNode);
+        analyzeFile(full, lang, fileNode, builder, pendingImports);
+      }
+    }
+  };
+
+  walkDir(absRepo, repoNode);
+
+  // Resolve imports → File nodes when possible.
+  resolveImports(pendingImports, fileNodesByAbsPath, builder);
+
+  // Optional: collapse unresolved CALLS that match a Function/Method name in the same file or repo.
+  if (opts.resolveCallsByName !== false) {
+    resolveCallsByName(builder);
+  }
+
+  return builder.build();
+}
+
+function analyzeFile(
+  filePath: string,
+  language: SupportedLanguage,
+  fileNode: GraphNode,
+  builder: GraphBuilder,
+  pendingImports: ExtractContext["pendingImports"],
+): void {
+  let source: string;
+  try {
+    source = fs.readFileSync(filePath, "utf8");
+  } catch {
+    return;
+  }
+
+  let tree;
+  try {
+    const parser = getParser(language);
+    // node-tree-sitter's default internal buffer is 32 KiB; pass an explicit
+    // bufferSize so files larger than that still parse cleanly.
+    tree = parser.parse(source, undefined, {
+      bufferSize: Math.max(source.length + 1024, 32 * 1024),
+    });
+  } catch (err) {
+    console.warn(`[ast-graph] parse failed for ${filePath}: ${(err as Error).message}`);
+    return;
+  }
+
+  const extractor = pickExtractor(language);
+  const ctx: ExtractContext = {
+    builder,
+    fileNode,
+    filePath,
+    language,
+    pendingImports,
+  };
+  extractor.extract(tree.rootNode, ctx);
+}
+
+function pickExtractor(language: SupportedLanguage): LanguageExtractor {
+  switch (language) {
+    case "java":
+      return new JavaExtractor();
+    case "javascript":
+    case "typescript":
+    case "tsx":
+      return new JsTsExtractor();
+  }
+}
+
+const JS_EXT_PRIORITY = [
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+  "/index.ts",
+  "/index.tsx",
+  "/index.js",
+  "/index.jsx",
+];
+
+// TS NodeNext / "bundler" resolution: imports are written with the runtime
+// extension (`.js`) but the on-disk file is `.ts`. Swap before falling back
+// to extension-append candidates.
+const JS_TO_TS_EXT_MAP: Record<string, string[]> = {
+  ".js": [".ts", ".tsx"],
+  ".jsx": [".tsx", ".ts"],
+  ".mjs": [".mts", ".ts"],
+  ".cjs": [".cts", ".ts"],
+};
+
+function resolveImports(
+  pending: ExtractContext["pendingImports"],
+  fileNodes: Map<string, GraphNode>,
+  builder: GraphBuilder,
+): void {
+  for (const imp of pending) {
+    const fromNode = builder.getNode(imp.from);
+    if (!fromNode || !fromNode.path) continue;
+
+    const targetFile = resolveSpec(fromNode, imp.spec, fileNodes);
+    if (targetFile) {
+      builder.addEdge({
+        kind: "IMPORTS",
+        from: fromNode.id,
+        to: targetFile.id,
+      });
+    } else {
+      builder.addEdge({
+        kind: "IMPORTS",
+        from: fromNode.id,
+        to: `unresolved:module:${imp.spec}`,
+        unresolved: imp.spec,
+      });
+    }
+  }
+}
+
+function resolveSpec(
+  fromFile: GraphNode,
+  spec: string,
+  fileNodes: Map<string, GraphNode>,
+): GraphNode | null {
+  if (!fromFile.path) return null;
+
+  // Relative JS/TS specifier
+  if (spec.startsWith(".") || spec.startsWith("/")) {
+    const base = path.resolve(path.dirname(fromFile.path), spec);
+    if (fileNodes.has(base)) return fileNodes.get(base)!;
+
+    // NodeNext / bundler resolution: `./foo.js` → `./foo.ts` (or `.tsx`, …).
+    const ext = path.extname(base);
+    const swaps = JS_TO_TS_EXT_MAP[ext];
+    if (swaps) {
+      const stem = base.slice(0, -ext.length);
+      for (const swap of swaps) {
+        const candidate = stem + swap;
+        if (fileNodes.has(candidate)) return fileNodes.get(candidate)!;
+      }
+    }
+
+    for (const e of JS_EXT_PRIORITY) {
+      const candidate = base + e;
+      if (fileNodes.has(candidate)) return fileNodes.get(candidate)!;
+    }
+    return null;
+  }
+
+  // Java: dotted spec like `com.foo.Bar` -> look for a file path ending with `com/foo/Bar.java`
+  if (fromFile.language === "java") {
+    const cleaned = spec.replace(/\.\*$/, "");
+    const sub = cleaned.split(".").join(path.sep) + ".java";
+    for (const [p, node] of fileNodes) {
+      if (p.endsWith(path.sep + sub) || p.endsWith(sub)) return node;
+    }
+  }
+
+  return null;
+}
+
+function resolveCallsByName(builder: GraphBuilder): void {
+  const graph = builder.build();
+  // index callable nodes by name
+  const byName = new Map<string, GraphNode[]>();
+  for (const n of graph.nodes) {
+    if (n.kind === "Function" || n.kind === "Method") {
+      const arr = byName.get(n.name) ?? [];
+      arr.push(n);
+      byName.set(n.name, arr);
+    }
+  }
+
+  for (const edge of graph.edges) {
+    if (edge.kind !== "CALLS") continue;
+    if (!edge.unresolved) continue;
+    const candidates = byName.get(edge.unresolved);
+    if (!candidates || candidates.length === 0) continue;
+
+    // Prefer a callable defined in the same file as the caller.
+    const fromNode = builder.getNode(edge.from);
+    let target = candidates[0];
+    if (fromNode?.path) {
+      const same = candidates.find((c) => c.path === fromNode.path);
+      if (same) target = same;
+    }
+
+    const oldTo = edge.to;
+    edge.to = target.id;
+    delete edge.unresolved;
+    edge.id = `${edge.kind}:${edge.from}->${edge.to}`;
+    builder.rekeyEdge(edge.from, oldTo, edge.kind, edge);
   }
 }
