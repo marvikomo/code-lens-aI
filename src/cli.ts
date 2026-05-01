@@ -4,6 +4,7 @@ import fs from "fs";
 import path from "path";
 import { analyzeRepository } from "./analyser/analyser";
 import { indexToNeo4j } from "./indexers/neo4j";
+import { clusterInNeo4j } from "./clustering/neo4j-leiden";
 
 interface CliArgs {
   repo: string;
@@ -20,6 +21,12 @@ interface CliArgs {
   neo4jDatabase?: string;
   neo4jClear: boolean;
   neo4jSkipUnresolved: boolean;
+  // Clustering
+  cluster: boolean;
+  clusterClear: boolean;
+  clusterSpinePagerank?: number;
+  clusterSpineBoundary?: number;
+  clusterMinSize?: number;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -32,6 +39,8 @@ function parseArgs(argv: string[]): CliArgs {
     noJson: false,
     neo4jClear: false,
     neo4jSkipUnresolved: false,
+    cluster: false,
+    clusterClear: false,
   };
   const rest: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -74,6 +83,21 @@ function parseArgs(argv: string[]): CliArgs {
       case "--neo4j-skip-unresolved":
         args.neo4jSkipUnresolved = true;
         break;
+      case "--cluster":
+        args.cluster = true;
+        break;
+      case "--cluster-clear":
+        args.clusterClear = true;
+        break;
+      case "--cluster-spine-pagerank":
+        args.clusterSpinePagerank = Number(argv[++i]);
+        break;
+      case "--cluster-spine-boundary":
+        args.clusterSpineBoundary = Number(argv[++i]);
+        break;
+      case "--cluster-min-size":
+        args.clusterMinSize = Number(argv[++i]);
+        break;
       case "-h":
       case "--help":
         printHelp();
@@ -114,6 +138,13 @@ Neo4j (also reads NEO4J_URI / NEO4J_USER / NEO4J_PASSWORD / NEO4J_DATABASE):
       --neo4j-database <name>
       --neo4j-clear            DETACH DELETE all :CodeNode before indexing
       --neo4j-skip-unresolved  Skip edges whose target was never resolved
+
+Clustering (requires Neo4j + GDS plugin; runs after indexing):
+      --cluster                Run Leiden community detection on File-IMPORTS
+      --cluster-clear          Wipe community props + :Community nodes first
+      --cluster-spine-pagerank <n>   Per-community top-K by PageRank (default 5)
+      --cluster-spine-boundary <n>   Per-community top-K by boundary degree (default 3)
+      --cluster-min-size <n>         Min files to materialize a :Community node (default 3)
 
   -h, --help                   Show this help`,
   );
@@ -178,6 +209,32 @@ async function main(): Promise<void> {
     });
     console.error(
       `[ast-graph] indexed ${result.nodesWritten} nodes, ${result.edgesWritten} edges`,
+    );
+  }
+
+  // ── Leiden clustering ──────────────────────────────────────────────
+  if (args.cluster) {
+    if (!args.neo4jUri || !args.neo4jUser || !args.neo4jPassword) {
+      console.error(
+        "[ast-graph] --cluster requires Neo4j credentials (--neo4j-uri / --neo4j-user / --neo4j-password)",
+      );
+      process.exit(2);
+    }
+    console.error("[ast-graph] running Leiden clustering ...");
+    const report = await clusterInNeo4j({
+      uri: args.neo4jUri,
+      user: args.neo4jUser,
+      password: args.neo4jPassword,
+      database: args.neo4jDatabase,
+      clear: args.clusterClear,
+      spinePagerank: args.clusterSpinePagerank,
+      spineBoundary: args.clusterSpineBoundary,
+      minSize: args.clusterMinSize,
+    });
+    console.error(
+      `[ast-graph] clusters: ${report.communities} found, ` +
+        `${report.materialized} materialized (size >= ${args.clusterMinSize ?? 3}), ` +
+        `${report.spineNodes} spine files (${report.filesScored} files scored)`,
     );
   }
 }
