@@ -237,59 +237,17 @@ export class CodeAnalyzer {
     directoryPath: string,
     options: { ignoreDirs?: string[]; ignoreFiles?: string[] } = {},
   ): Promise<void> {
-    //('Analyzing dir:', directoryPath);
+    const files = await this.collectFiles(directoryPath, options)
+    console.log(`Found ${files.length} files`)
 
-  //   const client = getLSPClient('typescript')
+    await this.performAnalysis(files, directoryPath)
 
-  //   const files = await this.collectFiles(directoryPath, options)
-  //   await this.performAnalysis(files, directoryPath)
+    console.log(
+      `Graph built: ${this.graph.nodes().length} nodes, ${this.graph.edges().length} edges`,
+    )
 
-  //   const docFiles = await this.llmService.identifyDocFiles(files)
-  //   console.log('doc files', docFiles)
-
-  //   const projectDescription = await this.llmService.getProjectDescription(
-  //     docFiles.documentationFiles,
-  //   )
-  //   // console.log('project description', projectDescription)
-
-  //   const nodes = await this.llmService.selectTopNodesFromAllModules(
-  //     docFiles.documentationFiles,
-  //     projectDescription,
-  //   )
-
-  //   console.log('selected nodes', nodes)
-
-  //   await this.nodeInference.processSelectedNodes(nodes, projectDescription)
-
-  //   for (const nodeId of this.graph.nodes()) {
-  //     const nodeData = this.graph.node(nodeId)
-  //     if (nodeData && nodeData?.type === 'function') {
-  //       console.log('function nodes', nodeData)
-  //     }
-  //   }
-
-  //   // await this.indexer.indexGraph(this.graph)
-  //   // console.log('All nodes indexed to Neo4j successfully')
-
-  //     console.log('🔮 Generating embeddings...')
-  //   await this.embeddings.generateAllEmbeddings({
-  //     includeRelationships: true,
-  //     includeCode: true,
-  //     includeSignature: true,
-  //     includeContext: true,
-  //     maxContextLength: 1500,
-  //   })
-
-  //  await this.indexer.indexGraph(this.graph)
-
-     let vector = await this.embeddings.generateEmbedding("how is the implemtation for permission")
-
-     const result = await this.indexer.searchSimilarNodes(vector, 15)
-     console.log("search result", result)
-
-    // console.log('parsed files', this.parsedFiles)
-
-    // console.log('Files collected:', files);
+    await this.indexer.indexGraph(this.graph)
+    console.log('Indexed graph to Neo4j')
   }
 
   /**
@@ -304,12 +262,18 @@ export class CodeAnalyzer {
   ): Promise<void> {
     console.log('Starting static AST analysis phase...')
     console.log('directory path', directoryPath)
-    const client = new TypeScriptLSPClient(directoryPath)
-    try {
-      await client.start()
 
-      await client.openAllProjectFiles(files)
-      console.log('LSP client started and files opened.')
+    // LSP disabled — using no-op stub. Re-enable for precise cross-file call resolution.
+    // const client = new TypeScriptLSPClient(directoryPath)
+    // await client.start()
+    // await client.openAllProjectFiles(files)
+    const client: any = {
+      getAllSymbols: async () => [],
+      getCallees: async () => [],
+      shutdown: () => {},
+    }
+
+    try {
       // Analyze parsed files
       for (const filePath of files) {
         const parseResult = await this.parser.parseFile(filePath)

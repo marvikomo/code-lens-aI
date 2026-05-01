@@ -29,14 +29,15 @@ async function main() {
     const languageRegistry = new LanguageRegistry()
     
 
-    // Initialize and run analyzer
     const analyzer = new CodeAnalyzer(neo4jConfig, languageRegistry)
-   // await analyzer.cloneRepo('https://github.com/actuallymentor/battery', './repo')
-    const directoryToAnalyze =
-      '/Users/ikponmwosaomorisiagbon/MySites/code-lens-aI/repo'
+
+    const directoryToAnalyze = path.resolve(
+      process.argv[2] || Config.targetDirectory,
+    )
+    console.log(`Analyzing: ${directoryToAnalyze}`)
 
     await analyzer.analyze(directoryToAnalyze, {
-      ignoreDirs: ['node_modules', '.git'],
+      ignoreDirs: ['node_modules', '.git', 'dist', 'build'],
       ignoreFiles: ['package-lock.json'],
     })
 
