@@ -2,8 +2,13 @@
 import "dotenv/config";
 import fs from "fs";
 import path from "path";
+import neo4j from "neo4j-driver";
 import { analyzeRepository } from "./analyser/analyser";
 import { indexToNeo4j } from "./indexers/neo4j";
+import { clusterInNeo4j } from "./clustering/neo4j-leiden";
+import { computeAndStoreEmbeddings } from "./embeddings/pipeline";
+import { search, type SearchMode } from "./search";
+import { startMcpServer } from "./mcp/server";
 
 interface CliArgs {
   repo: string;
@@ -20,6 +25,23 @@ interface CliArgs {
   neo4jDatabase?: string;
   neo4jClear: boolean;
   neo4jSkipUnresolved: boolean;
+  // Clustering
+  cluster: boolean;
+  clusterOnly: boolean;
+  clusterClear: boolean;
+  clusterSpinePagerank?: number;
+  clusterSpineBoundary?: number;
+  clusterMinSize?: number;
+  // Embeddings
+  embed: boolean;
+  embedModel?: string;
+  embedBatch?: number;
+  // Search
+  searchQuery?: string;
+  searchMode?: SearchMode;
+  searchLimit?: number;
+  // MCP server
+  mcp: boolean;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -32,6 +54,11 @@ function parseArgs(argv: string[]): CliArgs {
     noJson: false,
     neo4jClear: false,
     neo4jSkipUnresolved: false,
+    cluster: false,
+    clusterOnly: false,
+    clusterClear: false,
+    embed: false,
+    mcp: false,
   };
   const rest: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -74,6 +101,55 @@ function parseArgs(argv: string[]): CliArgs {
       case "--neo4j-skip-unresolved":
         args.neo4jSkipUnresolved = true;
         break;
+      case "--cluster":
+        args.cluster = true;
+        break;
+      case "--cluster-only":
+        // Implies --cluster (the dispatch logic uses cluster=true).
+        args.cluster = true;
+        args.clusterOnly = true;
+        break;
+      case "--cluster-clear":
+        args.clusterClear = true;
+        break;
+      case "--cluster-spine-pagerank":
+        args.clusterSpinePagerank = Number(argv[++i]);
+        break;
+      case "--cluster-spine-boundary":
+        args.clusterSpineBoundary = Number(argv[++i]);
+        break;
+      case "--cluster-min-size":
+        args.clusterMinSize = Number(argv[++i]);
+        break;
+      case "--embed":
+        args.embed = true;
+        break;
+      case "--embed-model":
+        args.embedModel = argv[++i];
+        break;
+      case "--embed-batch":
+        args.embedBatch = Number(argv[++i]);
+        break;
+      case "--search":
+        args.searchQuery = argv[++i];
+        break;
+      case "--search-mode": {
+        const v = argv[++i];
+        if (v !== "fts" && v !== "vector" && v !== "hybrid") {
+          console.error(
+            `[ast-graph] --search-mode must be one of: fts, vector, hybrid (got "${v}")`,
+          );
+          process.exit(2);
+        }
+        args.searchMode = v;
+        break;
+      }
+      case "--search-limit":
+        args.searchLimit = Number(argv[++i]);
+        break;
+      case "--mcp":
+        args.mcp = true;
+        break;
       case "-h":
       case "--help":
         printHelp();
@@ -82,7 +158,13 @@ function parseArgs(argv: string[]): CliArgs {
         rest.push(a);
     }
   }
-  args.repo = rest[0] ?? ".";
+  // Default to "." only when no --search is given. With --search but no
+  // positional, leave repo empty so the search-only branch fires.
+  if (rest[0]) {
+    args.repo = rest[0];
+  } else if (!args.searchQuery) {
+    args.repo = ".";
+  }
 
   // Env-var fallbacks for credentials.
   args.neo4jUri ??= process.env.NEO4J_URI;
@@ -115,15 +197,70 @@ Neo4j (also reads NEO4J_URI / NEO4J_USER / NEO4J_PASSWORD / NEO4J_DATABASE):
       --neo4j-clear            DETACH DELETE all :CodeNode before indexing
       --neo4j-skip-unresolved  Skip edges whose target was never resolved
 
+Clustering (requires Neo4j + GDS plugin; runs after indexing):
+      --cluster                Run Leiden community detection on File-IMPORTS
+      --cluster-only           Only run clustering against existing graph (skip
+                               analyze/index/embed). No <repo-path> needed.
+                               Preserves existing embeddings.
+      --cluster-clear          Wipe community props + :Community nodes first
+      --cluster-spine-pagerank <n>   Per-community top-K by PageRank (default 5)
+      --cluster-spine-boundary <n>   Per-community top-K by boundary degree (default 3)
+      --cluster-min-size <n>         Min files to materialize a :Community node (default 3)
+
+Embeddings (requires Neo4j; downloads ~161 MB model on first run):
+      --embed                  Compute embeddings for all Function/Method/Class nodes
+      --embed-model <hf-id>    Override default jinaai/jina-embeddings-v2-base-code
+      --embed-batch <n>        Batch size for the embedding model (default 32)
+
+Search (runs against existing graph; can run with no <repo-path>):
+      --search "<query>"       Run a search and print top hits
+      --search-mode <m>        fts | vector | hybrid (auto if omitted)
+      --search-limit <n>       Top-N results (default 20)
+
+MCP server mode (stdio; no <repo-path> needed):
+      --mcp                    Start the Model Context Protocol server.
+                               Wire into Claude Desktop/Cursor/Codex configs.
+
   -h, --help                   Show this help`,
   );
 }
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
-  if (!args.repo) {
+
+  // MCP server mode — no repo path needed; runs until killed.
+  if (args.mcp) {
+    if (!args.neo4jUri || !args.neo4jUser || !args.neo4jPassword) {
+      console.error(
+        "[ast-graph] --mcp requires Neo4j credentials (--neo4j-uri / --neo4j-user / --neo4j-password)",
+      );
+      process.exit(2);
+    }
+    await startMcpServer({
+      neo4jUri: args.neo4jUri,
+      neo4jUser: args.neo4jUser,
+      neo4jPassword: args.neo4jPassword,
+      neo4jDatabase: args.neo4jDatabase,
+    });
+    return; // server keeps process alive via stdio + signal handlers
+  }
+
+  // Cluster-only mode: skip analyze/index/embed/search; just re-cluster.
+  if (args.clusterOnly) {
+    await runClusterOnly(args);
+    return;
+  }
+
+  // Search-only mode: no repo path needed.
+  const searchOnly = !args.repo && !!args.searchQuery;
+  if (!args.repo && !searchOnly) {
     printHelp();
     process.exit(1);
+  }
+
+  if (searchOnly) {
+    await runSearch(args);
+    return;
   }
 
   console.error(`[ast-graph] analysing ${path.resolve(args.repo)} ...`);
@@ -179,6 +316,127 @@ async function main(): Promise<void> {
     console.error(
       `[ast-graph] indexed ${result.nodesWritten} nodes, ${result.edgesWritten} edges`,
     );
+  }
+
+  // ── Leiden clustering ──────────────────────────────────────────────
+  if (args.cluster) {
+    if (!args.neo4jUri || !args.neo4jUser || !args.neo4jPassword) {
+      console.error(
+        "[ast-graph] --cluster requires Neo4j credentials (--neo4j-uri / --neo4j-user / --neo4j-password)",
+      );
+      process.exit(2);
+    }
+    console.error("[ast-graph] running Leiden clustering ...");
+    const report = await clusterInNeo4j({
+      uri: args.neo4jUri,
+      user: args.neo4jUser,
+      password: args.neo4jPassword,
+      database: args.neo4jDatabase,
+      clear: args.clusterClear,
+      spinePagerank: args.clusterSpinePagerank,
+      spineBoundary: args.clusterSpineBoundary,
+      minSize: args.clusterMinSize,
+    });
+    console.error(
+      `[ast-graph] clusters: ${report.communities} found, ` +
+        `${report.materialized} materialized (size >= ${args.clusterMinSize ?? 3}), ` +
+        `${report.spineNodes} spine files (${report.filesScored} files scored)`,
+    );
+  }
+
+  // ── Embeddings ─────────────────────────────────────────────────────
+  if (args.embed) {
+    if (!args.neo4jUri || !args.neo4jUser || !args.neo4jPassword) {
+      console.error(
+        "[ast-graph] --embed requires Neo4j credentials (--neo4j-uri / --neo4j-user / --neo4j-password)",
+      );
+      process.exit(2);
+    }
+    console.error("[ast-graph] computing embeddings ...");
+    const report = await computeAndStoreEmbeddings({
+      uri: args.neo4jUri,
+      user: args.neo4jUser,
+      password: args.neo4jPassword,
+      database: args.neo4jDatabase,
+      model: args.embedModel,
+      batchSize: args.embedBatch,
+    });
+    console.error(
+      `[ast-graph] embedded ${report.embedded}/${report.totalCandidates} nodes ` +
+        `(skipped ${report.skipped}) in ${(report.durationMs / 1000).toFixed(1)}s`,
+    );
+  }
+
+  // ── Search ─────────────────────────────────────────────────────────
+  if (args.searchQuery) {
+    await runSearch(args);
+  }
+}
+
+async function runClusterOnly(args: CliArgs): Promise<void> {
+  if (!args.neo4jUri || !args.neo4jUser || !args.neo4jPassword) {
+    console.error(
+      "[ast-graph] --cluster-only requires Neo4j credentials (--neo4j-uri / --neo4j-user / --neo4j-password)",
+    );
+    process.exit(2);
+  }
+  console.error("[ast-graph] running Leiden clustering against existing graph ...");
+  const report = await clusterInNeo4j({
+    uri: args.neo4jUri,
+    user: args.neo4jUser,
+    password: args.neo4jPassword,
+    database: args.neo4jDatabase,
+    clear: args.clusterClear,
+    spinePagerank: args.clusterSpinePagerank,
+    spineBoundary: args.clusterSpineBoundary,
+    minSize: args.clusterMinSize,
+  });
+  console.error(
+    `[ast-graph] clusters: ${report.communities} found, ` +
+      `${report.materialized} materialized (size >= ${args.clusterMinSize ?? 3}), ` +
+      `${report.spineNodes} spine files (${report.filesScored} files scored)`,
+  );
+}
+
+async function runSearch(args: CliArgs): Promise<void> {
+  if (!args.neo4jUri || !args.neo4jUser || !args.neo4jPassword) {
+    console.error(
+      "[ast-graph] --search requires Neo4j credentials (--neo4j-uri / --neo4j-user / --neo4j-password)",
+    );
+    process.exit(2);
+  }
+  const driver = neo4j.driver(
+    args.neo4jUri,
+    neo4j.auth.basic(args.neo4jUser, args.neo4jPassword),
+  );
+  try {
+    console.error(
+      `[ast-graph] search "${args.searchQuery}" ` +
+        `(mode=${args.searchMode ?? "auto"}, limit=${args.searchLimit ?? 20})`,
+    );
+    const hits = await search(driver, args.searchQuery!, {
+      mode: args.searchMode,
+      limit: args.searchLimit,
+      database: args.neo4jDatabase,
+    });
+    if (hits.length === 0) {
+      console.error("[ast-graph] no hits");
+      return;
+    }
+    for (const hit of hits) {
+      const score = hit.score.toFixed(4);
+      const matched = hit.matchedBy.join("+");
+      const loc = hit.path
+        ? `${hit.path}:${(hit.startRow ?? 0) + 1}`
+        : "(no path)";
+      console.log(`[${matched} ${score}]  ${hit.kind}  ${hit.name}`);
+      console.log(`    ${loc}`);
+      if (hit.signature) {
+        console.log(`    ${hit.signature.split("\n")[0].trim()}`);
+      }
+    }
+  } finally {
+    await driver.close();
   }
 }
 

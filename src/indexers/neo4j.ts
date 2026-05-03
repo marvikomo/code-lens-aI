@@ -40,7 +40,7 @@ export async function indexToNeo4j(
   let edgesWritten = 0;
 
   try {
-    // 1. Schema: uniqueness constraint on CodeNode(id).
+    // 1. Schema: uniqueness constraint + full-text index on CodeNode.
     {
       const session = driver.session(sessionConfig);
       try {
@@ -48,6 +48,16 @@ export async function indexToNeo4j(
           tx.run(
             `CREATE CONSTRAINT code_node_id IF NOT EXISTS
                FOR (n:CodeNode) REQUIRE n.id IS UNIQUE`,
+          ),
+        );
+        // Full-text index for keyword search across name/signature/body/path.
+        // Uses `whitespace` analyzer — no stemming, preserves identifiers.
+        await session.executeWrite((tx: ManagedTransaction) =>
+          tx.run(
+            `CREATE FULLTEXT INDEX code_fts IF NOT EXISTS
+               FOR (n:CodeNode)
+               ON EACH [n.name, n.signature, n.body, n.path]
+               OPTIONS { indexConfig: { \`fulltext.analyzer\`: 'whitespace' } }`,
           ),
         );
         if (opts.clear) {
@@ -156,6 +166,9 @@ function nodeToRow(n: GraphNode): Record<string, unknown> {
   };
   if (n.path) props.path = n.path;
   if (n.language) props.language = n.language;
+  if (n.signature) props.signature = n.signature;
+  if (n.body) props.body = n.body;
+  if (n.bodyTruncated) props.bodyTruncated = n.bodyTruncated;
   if (n.range) {
     props.startRow = n.range.start.row;
     props.startColumn = n.range.start.column;
