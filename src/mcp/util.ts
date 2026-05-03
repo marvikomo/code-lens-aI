@@ -42,6 +42,25 @@ export async function readQuery(
   }
 }
 
+/** Run a write Cypher query (SET/MERGE/CREATE/DELETE) and return records. */
+export async function writeQuery(
+  ctx: ToolContext,
+  cypher: string,
+  params: Record<string, unknown> = {},
+): Promise<Record<string, unknown>[]> {
+  const session: Session = ctx.driver.session(
+    ctx.database ? { database: ctx.database } : {},
+  );
+  try {
+    const result = await session.executeWrite((tx: ManagedTransaction) =>
+      tx.run(cypher, params),
+    );
+    return result.records.map((r) => r.toObject());
+  } finally {
+    await session.close();
+  }
+}
+
 /** Convert a Neo4j Integer (Int64) or numeric value to a JS number. */
 export function asNumber(v: unknown): number | undefined {
   if (v == null) return undefined;
