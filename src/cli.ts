@@ -8,6 +8,7 @@ import { indexToNeo4j } from "./indexers/neo4j";
 import { clusterInNeo4j } from "./clustering/neo4j-leiden";
 import { computeAndStoreEmbeddings } from "./embeddings/pipeline";
 import { search, type SearchMode } from "./search";
+import { startMcpServer } from "./mcp/server";
 
 interface CliArgs {
   repo: string;
@@ -26,6 +27,7 @@ interface CliArgs {
   neo4jSkipUnresolved: boolean;
   // Clustering
   cluster: boolean;
+  clusterOnly: boolean;
   clusterClear: boolean;
   clusterSpinePagerank?: number;
   clusterSpineBoundary?: number;
@@ -38,6 +40,8 @@ interface CliArgs {
   searchQuery?: string;
   searchMode?: SearchMode;
   searchLimit?: number;
+  // MCP server
+  mcp: boolean;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -51,8 +55,10 @@ function parseArgs(argv: string[]): CliArgs {
     neo4jClear: false,
     neo4jSkipUnresolved: false,
     cluster: false,
+    clusterOnly: false,
     clusterClear: false,
     embed: false,
+    mcp: false,
   };
   const rest: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -98,6 +104,11 @@ function parseArgs(argv: string[]): CliArgs {
       case "--cluster":
         args.cluster = true;
         break;
+      case "--cluster-only":
+        // Implies --cluster (the dispatch logic uses cluster=true).
+        args.cluster = true;
+        args.clusterOnly = true;
+        break;
       case "--cluster-clear":
         args.clusterClear = true;
         break;
@@ -135,6 +146,9 @@ function parseArgs(argv: string[]): CliArgs {
       }
       case "--search-limit":
         args.searchLimit = Number(argv[++i]);
+        break;
+      case "--mcp":
+        args.mcp = true;
         break;
       case "-h":
       case "--help":
@@ -185,6 +199,9 @@ Neo4j (also reads NEO4J_URI / NEO4J_USER / NEO4J_PASSWORD / NEO4J_DATABASE):
 
 Clustering (requires Neo4j + GDS plugin; runs after indexing):
       --cluster                Run Leiden community detection on File-IMPORTS
+      --cluster-only           Only run clustering against existing graph (skip
+                               analyze/index/embed). No <repo-path> needed.
+                               Preserves existing embeddings.
       --cluster-clear          Wipe community props + :Community nodes first
       --cluster-spine-pagerank <n>   Per-community top-K by PageRank (default 5)
       --cluster-spine-boundary <n>   Per-community top-K by boundary degree (default 3)
@@ -200,12 +217,39 @@ Search (runs against existing graph; can run with no <repo-path>):
       --search-mode <m>        fts | vector | hybrid (auto if omitted)
       --search-limit <n>       Top-N results (default 20)
 
+MCP server mode (stdio; no <repo-path> needed):
+      --mcp                    Start the Model Context Protocol server.
+                               Wire into Claude Desktop/Cursor/Codex configs.
+
   -h, --help                   Show this help`,
   );
 }
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+
+  // MCP server mode — no repo path needed; runs until killed.
+  if (args.mcp) {
+    if (!args.neo4jUri || !args.neo4jUser || !args.neo4jPassword) {
+      console.error(
+        "[ast-graph] --mcp requires Neo4j credentials (--neo4j-uri / --neo4j-user / --neo4j-password)",
+      );
+      process.exit(2);
+    }
+    await startMcpServer({
+      neo4jUri: args.neo4jUri,
+      neo4jUser: args.neo4jUser,
+      neo4jPassword: args.neo4jPassword,
+      neo4jDatabase: args.neo4jDatabase,
+    });
+    return; // server keeps process alive via stdio + signal handlers
+  }
+
+  // Cluster-only mode: skip analyze/index/embed/search; just re-cluster.
+  if (args.clusterOnly) {
+    await runClusterOnly(args);
+    return;
+  }
 
   // Search-only mode: no repo path needed.
   const searchOnly = !args.repo && !!args.searchQuery;
@@ -327,6 +371,31 @@ async function main(): Promise<void> {
   if (args.searchQuery) {
     await runSearch(args);
   }
+}
+
+async function runClusterOnly(args: CliArgs): Promise<void> {
+  if (!args.neo4jUri || !args.neo4jUser || !args.neo4jPassword) {
+    console.error(
+      "[ast-graph] --cluster-only requires Neo4j credentials (--neo4j-uri / --neo4j-user / --neo4j-password)",
+    );
+    process.exit(2);
+  }
+  console.error("[ast-graph] running Leiden clustering against existing graph ...");
+  const report = await clusterInNeo4j({
+    uri: args.neo4jUri,
+    user: args.neo4jUser,
+    password: args.neo4jPassword,
+    database: args.neo4jDatabase,
+    clear: args.clusterClear,
+    spinePagerank: args.clusterSpinePagerank,
+    spineBoundary: args.clusterSpineBoundary,
+    minSize: args.clusterMinSize,
+  });
+  console.error(
+    `[ast-graph] clusters: ${report.communities} found, ` +
+      `${report.materialized} materialized (size >= ${args.clusterMinSize ?? 3}), ` +
+      `${report.spineNodes} spine files (${report.filesScored} files scored)`,
+  );
 }
 
 async function runSearch(args: CliArgs): Promise<void> {
