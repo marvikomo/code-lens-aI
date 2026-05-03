@@ -4,7 +4,8 @@ import * as fs from "fs";
 import type { ToolContext } from "../server";
 import { textResult } from "../util";
 
-const MAX_LINES = 500;
+// Matches Claude Code's built-in Read tool default.
+const MAX_LINES = 2000;
 
 const readCodeSchema: Record<string, any> = {
   file: z.string().describe("Absolute file path."),
@@ -31,7 +32,7 @@ export function registerReadCode(server: McpServer, ctx: ToolContext): void {
         "Read a slice of source code directly from disk. Useful when get_definition's stored body " +
         "is truncated or you need surrounding context (imports, sibling functions, etc.). " +
         "Pass startLine + endLine (1-indexed, inclusive) to slice; omit both to read the whole file. " +
-        "Caps output at 500 lines per call to avoid blowing the context.",
+        "Caps output at 2000 lines per call (matches the built-in Read tool).",
       inputSchema: readCodeSchema,
     },
     async ({ file, startLine, endLine }) => {

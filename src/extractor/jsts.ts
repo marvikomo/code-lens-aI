@@ -221,6 +221,42 @@ export class JsTsExtractor implements LanguageExtractor {
               }
             }
             handledAny = true;
+          } else if (
+            // Top-level `const X = someBuilder(...)` — captures state objects,
+            // schemas, configs, routers, etc. that are hidden from the structural
+            // index because their value is a call_expression rather than a class
+            // or function declaration. Examples:
+            //   export const PlanAgentState = Annotation.Root({...})
+            //   export const UserSchema = z.object({...})
+            //   const router = Router()
+            //   const prisma = new PrismaClient()
+            //
+            // We add the Variable node but deliberately do NOT set handledAny —
+            // the bottom-of-method recursion still needs to walk the call's
+            // arguments so captureHandlerArgs can find anonymous handler fns.
+            enclosing === null &&
+            nameNode &&
+            value &&
+            (value.type === "call_expression" || value.type === "new_expression")
+          ) {
+            const name = nameNode.text;
+            const id = `${ctx.fileNode.id}#var:${name}`;
+            const v = ctx.builder.addNode({
+              id,
+              kind: "Variable",
+              name,
+              path: ctx.filePath,
+              language: ctx.language,
+              range: rangeOf(decl),
+              signature: signatureOf(decl),
+              ...bodyFields(decl),
+              builder: builderNameOf(value) ?? undefined,
+            });
+            ctx.builder.addEdge({
+              kind: "DEFINES",
+              from: ctx.fileNode.id,
+              to: v.id,
+            });
           }
         }
         if (handledAny) return;
@@ -354,6 +390,11 @@ export class JsTsExtractor implements LanguageExtractor {
     const firstString = args.namedChildren.find((c) => c.type === "string");
     const tag = firstString ? stripQuotes(firstString.text) : null;
 
+    // Detect HTTP-handler shape (router.post("/x", handler) etc) so cypher
+    // queries can match on httpMethod/route directly without parsing the
+    // composite display name.
+    const httpInfo = fn ? extractHttpInfo(fn, args) : null;
+
     handlers.forEach((arg, idx) => {
       const suffix = handlers.length > 1 ? `#${idx}` : "";
       const name = tag
@@ -369,6 +410,13 @@ export class JsTsExtractor implements LanguageExtractor {
         range: rangeOf(arg),
         signature: signatureOf(arg),
         ...bodyFields(arg),
+        ...(httpInfo
+          ? {
+              httpMethod: httpInfo.method,
+              route: httpInfo.route,
+              routerObject: httpInfo.routerObject,
+            }
+          : {}),
       });
       ctx.builder.addEdge({
         kind: "DEFINES",
@@ -443,6 +491,60 @@ export class JsTsExtractor implements LanguageExtractor {
       for (const c of n.namedChildren) stack.push(c);
     }
   }
+}
+
+const HTTP_VERBS = new Set([
+  "get",
+  "post",
+  "put",
+  "delete",
+  "patch",
+  "options",
+  "head",
+  "all",
+  "use",
+]);
+
+/**
+ * If the call shape is `<obj>.<verb>(<route>, <handler>)` where verb is an
+ * Express-style HTTP method, returns the structured form. Otherwise null.
+ * Used to attach httpMethod/route/routerObject props to handler nodes so
+ * cypher queries don't have to parse the display name.
+ */
+function extractHttpInfo(
+  fn: SyntaxNode,
+  args: SyntaxNode,
+): { method: string; route?: string; routerObject?: string } | null {
+  if (fn.type !== "member_expression") return null;
+  const verb = fn.childForFieldName("property")?.text?.toLowerCase();
+  if (!verb || !HTTP_VERBS.has(verb)) return null;
+  const obj = fn.childForFieldName("object")?.text;
+  const firstString = args.namedChildren.find((c) => c.type === "string");
+  const route = firstString ? stripQuotes(firstString.text) : undefined;
+  return {
+    method: verb.toUpperCase(),
+    route,
+    routerObject: obj,
+  };
+}
+
+/**
+ * For a call_expression or new_expression, return a readable label for the
+ * thing being called: "Annotation.Root", "z.object", "Router", "PrismaClient".
+ * Used to tag Variable nodes so cypher can filter by builder pattern.
+ */
+function builderNameOf(value: SyntaxNode): string | null {
+  // new X() — extract the constructor name
+  if (value.type === "new_expression") {
+    const ctor = value.childForFieldName("constructor");
+    return ctor ? handlerLabelFor(ctor) : null;
+  }
+  // X(...) or X.Y(...)
+  if (value.type === "call_expression") {
+    const fn = value.childForFieldName("function");
+    return fn ? handlerLabelFor(fn) : null;
+  }
+  return null;
 }
 
 function handlerLabelFor(fn: SyntaxNode): string {

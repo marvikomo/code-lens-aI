@@ -169,6 +169,10 @@ function nodeToRow(n: GraphNode): Record<string, unknown> {
   if (n.signature) props.signature = n.signature;
   if (n.body) props.body = n.body;
   if (n.bodyTruncated) props.bodyTruncated = n.bodyTruncated;
+  if (n.httpMethod) props.httpMethod = n.httpMethod;
+  if (n.route) props.route = n.route;
+  if (n.routerObject) props.routerObject = n.routerObject;
+  if (n.builder) props.builder = n.builder;
   if (n.range) {
     props.startRow = n.range.start.row;
     props.startColumn = n.range.start.column;
