@@ -53,6 +53,12 @@ export interface GraphNode {
   path?: string;
   language?: "javascript" | "typescript" | "tsx" | "java";
   range?: SourceRange;
+  /** Declaration line(s) — function up to body, full text for type/enum/property. */
+  signature?: string;
+  /** Source text for the node. May be truncated; see bodyTruncated. */
+  body?: string;
+  /** True when body is a partial cut at MAX_BODY_BYTES. Absent when full. */
+  bodyTruncated?: boolean;
   /** Free-form metadata (modifiers, parameters, etc.) */
   meta?: Record<string, unknown>;
 }

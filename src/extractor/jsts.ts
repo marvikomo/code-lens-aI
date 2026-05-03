@@ -1,5 +1,12 @@
 import type { SyntaxNode } from "tree-sitter";
-import { ExtractContext, LanguageExtractor, rangeOf, fieldText } from "./base";
+import {
+  ExtractContext,
+  LanguageExtractor,
+  rangeOf,
+  fieldText,
+  bodyFields,
+  signatureOf,
+} from "./base";
 import type { GraphNode } from "../util/graph";
 
 /**
@@ -90,6 +97,8 @@ export class JsTsExtractor implements LanguageExtractor {
           path: ctx.filePath,
           language: ctx.language,
           range: rangeOf(node),
+          signature: signatureOf(node),
+          ...bodyFields(node),
         });
         ctx.builder.addEdge({
           kind: "DEFINES",
@@ -109,6 +118,8 @@ export class JsTsExtractor implements LanguageExtractor {
           path: ctx.filePath,
           language: ctx.language,
           range: rangeOf(node),
+          signature: signatureOf(node),
+          ...bodyFields(node),
         });
         ctx.builder.addEdge({
           kind: "DEFINES",
@@ -128,6 +139,8 @@ export class JsTsExtractor implements LanguageExtractor {
           path: ctx.filePath,
           language: ctx.language,
           range: rangeOf(node),
+          signature: signatureOf(node),
+          ...bodyFields(node),
         });
         ctx.builder.addEdge({
           kind: "DEFINES",
@@ -148,6 +161,8 @@ export class JsTsExtractor implements LanguageExtractor {
           path: ctx.filePath,
           language: ctx.language,
           range: rangeOf(node),
+          signature: signatureOf(node),
+          ...bodyFields(node),
         });
         ctx.builder.addEdge({
           kind: "DEFINES",
@@ -189,6 +204,8 @@ export class JsTsExtractor implements LanguageExtractor {
               path: ctx.filePath,
               language: ctx.language,
               range: rangeOf(decl),
+              signature: signatureOf(decl),
+              ...bodyFields(decl),
             });
             ctx.builder.addEdge({
               kind: "DEFINES",
@@ -226,6 +243,8 @@ export class JsTsExtractor implements LanguageExtractor {
       path: ctx.filePath,
       language: ctx.language,
       range: rangeOf(node),
+      signature: signatureOf(node),
+      ...bodyFields(node),
     });
   }
 
@@ -291,6 +310,8 @@ export class JsTsExtractor implements LanguageExtractor {
           path: ctx.filePath,
           language: ctx.language,
           range: rangeOf(member),
+          signature: signatureOf(member),
+          ...bodyFields(member),
         });
         ctx.builder.addEdge({ kind: "HAS_METHOD", from: cls.id, to: m.id });
         this.collectCalls(member, m, ctx);
@@ -308,6 +329,8 @@ export class JsTsExtractor implements LanguageExtractor {
           path: ctx.filePath,
           language: ctx.language,
           range: rangeOf(member),
+          signature: signatureOf(member),
+          ...bodyFields(member),
         });
         ctx.builder.addEdge({ kind: "HAS_PROPERTY", from: cls.id, to: p.id });
         return;
@@ -344,6 +367,8 @@ export class JsTsExtractor implements LanguageExtractor {
         path: ctx.filePath,
         language: ctx.language,
         range: rangeOf(arg),
+        signature: signatureOf(arg),
+        ...bodyFields(arg),
       });
       ctx.builder.addEdge({
         kind: "DEFINES",

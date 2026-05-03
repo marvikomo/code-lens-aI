@@ -1,5 +1,12 @@
 import type { SyntaxNode } from "tree-sitter";
-import { ExtractContext, LanguageExtractor, rangeOf, fieldText } from "./base";
+import {
+  ExtractContext,
+  LanguageExtractor,
+  rangeOf,
+  fieldText,
+  bodyFields,
+  signatureOf,
+} from "./base";
 import type { GraphNode } from "../util/graph";
 
 /**
@@ -78,6 +85,8 @@ export class JavaExtractor implements LanguageExtractor {
       path: ctx.filePath,
       language: ctx.language,
       range: rangeOf(node),
+      signature: signatureOf(node),
+      ...bodyFields(node),
     });
   }
 
@@ -132,6 +141,8 @@ export class JavaExtractor implements LanguageExtractor {
           path: ctx.filePath,
           language: ctx.language,
           range: rangeOf(member),
+          signature: signatureOf(member),
+          ...bodyFields(member),
         });
         ctx.builder.addEdge({ kind: "HAS_METHOD", from: cls.id, to: m.id });
         this.collectCalls(member, m, ctx);
@@ -151,6 +162,8 @@ export class JavaExtractor implements LanguageExtractor {
             path: ctx.filePath,
             language: ctx.language,
             range: rangeOf(member),
+            signature: signatureOf(member),
+            ...bodyFields(member),
           });
           ctx.builder.addEdge({ kind: "HAS_PROPERTY", from: cls.id, to: p.id });
         }
