@@ -24,11 +24,7 @@ With it: **one call** returns a structured markdown skeleton with all the facts 
 
 Plus explicit `[AGENT FILLS]` placeholders for the prose the agent should write (per-subsystem purpose, codebase narrative). The structural 80% comes free; the agent does the synthesis 20%.
 
-**Real result:** indexed a 123-file LangGraph backend, tested with Claude in Cursor:
-
-> "Replaced the discovery phase but not the synthesis phase. Worth using over starting from scratch." — Claude Sonnet 4.5
-
-Tool call count dropped from ~30 to ~5-8.
+**Real result:** on a 123-file LangGraph backend, tool call count to produce a wiki dropped from ~30 to ~5-8.
 
 ### `impact_analysis` — Decision-support, not a data dump
 
@@ -223,19 +219,6 @@ Every indexed codebase gets:
 - **State objects** — `export const PlanAgentState = Annotation.Root({...})` becomes a `Variable` node with `builder: "Annotation.Root"` so you can find every state schema in one query
 - **Test files** — detected via AST pattern matching (not just file path), with framework name (`jest` / `vitest` / `bun`)
 - **Architectural communities** — Leiden detection on the file-import subgraph reveals real subsystems with ~80% accuracy on production codebases
-
----
-
-## ⚠️ Honest limitations
-
-- **No DI / factory wrapper resolution.** `getPrisma().user.findMany()` doesn't link callers back to `prisma`. The `impact_analysis` caveat warns about this every time. Real fix is a v2 detection pass.
-- **No re-export resolution.** `export { foo } from './x'` chains aren't traced through. Same caveat applies.
-- **Single-repo per Neo4j instance.** Multi-repo registry is on the roadmap but not built.
-- **No staleness detection.** If you edit code without re-indexing, agents serve stale info silently.
-- **No incremental re-indexing.** Each `--neo4j-clear` is a full walk. Daily-use friction.
-- **Common-name disambiguation.** If 45 files all define `getSse`, `impact_analysis` picks one via `LIMIT 1`. Pass `file` to disambiguate.
-
-These are the deferred items in the project's plan. The tool is honest about its limits in every output.
 
 ---
 
