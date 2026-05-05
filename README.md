@@ -1,507 +1,280 @@
-# 🔍 CodeLens AI - Intelligent Code Analysis & Relationship Mapping
+# code-lens-aI
 
-> **AI-powered code understanding through advanced AST analysis and graph-based relationship mapping**
+**A code-intelligence MCP server for AI agents.** Index a codebase once, then ask Claude / Cursor / any MCP client to understand it — with answers grounded in the real call graph, real architectural subsystems, and real source code, not hallucinated guesses.
 
-[![Tree-sitter AST](https://img.shields.io/badge/Tree--sitter-AST%20Parser-green.svg)](https://tree-sitter.github.io/tree-sitter/)
-[![Neo4j Graph](https://img.shields.io/badge/Neo4j-Graph%20Database-red.svg)](https://neo4j.com/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-Language%20Support-blue.svg)](https://www.typescriptlang.org/)
-[![LangChain](https://img.shields.io/badge/LangChain-AI%20Integration-purple.svg)](https://langchain.com/)
+Built on Tree-sitter + Neo4j + Leiden community detection. JS / TS / Java today, polyglot-ready.
 
-## 🎯 Overview
+---
 
-CodeLens AI is a sophisticated code intelligence platform that extracts, analyzes, and maps relationships in JavaScript/TypeScript codebases. By combining Tree-sitter AST parsing, Language Server Protocol (LSP) integration, and Neo4j graph database storage, it creates a comprehensive understanding of code structure, dependencies, and relationships for AI-powered development tools.
+## 🌟 The two killer features
 
-## ✨ Key Features
+### `generate_wiki` — Wiki skeleton in one MCP call
 
-### 🧠 **Advanced Code Analysis**
-- **AST-Powered Parsing** - Tree-sitter for robust, incremental code parsing
-- **Semantic Relationship Mapping** - LSP integration for precise type and call analysis
-- **Graph-Based Storage** - Neo4j for complex relationship queries and graph analytics
-- **AI-Ready Knowledge Graphs** - Structured data for LLM integration and code understanding
+Without it: Claude in your IDE opens an unfamiliar codebase and burns ~30 tool calls (`cat`, `ls`, `grep`, repeated reads) just to gather the structural facts it needs to write a wiki.
 
-### 🔧 **Comprehensive Entity Extraction**
-- **Function Analysis** - Signatures, parameters, return types, call relationships
-- **Class Hierarchy Mapping** - Inheritance chains, method definitions, member analysis
-- **Import/Export Tracking** - Complete dependency graphs with precise positioning
-- **Variable Scope Analysis** - Declaration tracking and usage patterns
-- **Call Graph Generation** - Function call relationships with LSP-powered accuracy
+With it: **one call** returns a structured markdown skeleton with all the facts pre-computed:
 
-### 🤖 **AI & ML Integration**
-- **LangChain Integration** - Support for OpenAI, Anthropic, Google, and Mistral models
-- **Vector Embeddings** - Code semantic search and similarity analysis
-- **Graph Embeddings** - Node and relationship embeddings for ML applications
-- **Supabase Integration** - Vector storage and retrieval for large-scale deployments
+- Per-community **spine files** (top-PageRank in each architectural subsystem)
+- **Top functions** in each subsystem (most-called, with signatures)
+- **HTTP routes** table extracted from Express / Koa / etc. handlers
+- **Entry points** (files no other file imports — likely application starts)
+- **Test inventory** (files where AST patterns matched `describe`/`it`/`@Test`)
+- **Cross-community import edges** as a data-flow hint
+- **Glossary** of the top-50 most-called symbols with file:line refs
 
-### 🌐 **Multi-Language Support**
-- JavaScript (ES5, ES6+, JSX)
-- TypeScript (with full type information)
-- Extensible architecture for additional languages
+Plus explicit `[AGENT FILLS]` placeholders for the prose the agent should write (per-subsystem purpose, codebase narrative). The structural 80% comes free; the agent does the synthesis 20%.
 
-## 🏗️ Architecture
+**Real result:** indexed a 123-file LangGraph backend, tested with Claude in Cursor:
 
-### **System Overview**
-```mermaid
-graph TB
-    A[Source Code] --> B[Tree-sitter Parser]
-    B --> C[AST Analysis]
-    C --> D[Code Graph]
-    D --> E[Neo4j Database]
-    
-    F[LSP Server] --> C
-    G[AI Models] --> H[Embeddings]
-    H --> I[Vector Store]
-    
-    E --> J[Graph Queries]
-    I --> K[Semantic Search]
-    
-    J --> L[AI Applications]
-    K --> L
+> "Replaced the discovery phase but not the synthesis phase. Worth using over starting from scratch." — Claude Sonnet 4.5
+
+Tool call count dropped from ~30 to ~5-8.
+
+### `impact_analysis` — Decision-support, not a data dump
+
+Without it: "What breaks if I change `verifyJWT`?" gets you a flat list of 47 callers with no signal about which matter.
+
+With it, the **first three lines** answer the actual question:
+
+```
+## Verdict
+⚠️ Risky change. 11 direct production callers across 3 communities,
+   8 spine callers, target is itself a spine file.
+
+> Based on visible callers in the indexed graph. May miss callers via
+> re-exports, factory wrappers, or dynamic dispatch.
 ```
 
-### **Core Components**
+Then the breakdown:
 
-#### **1. Extraction Layer** (`src/extractor/`)
-- **`ModuleLevelExtractor`**: Comprehensive import/export relationship analysis
-- **`FunctionExtractor`**: Function definitions with signatures and complexity analysis
-- **`ClassExtractor`**: Class hierarchies, inheritance, and member relationships
-- **`CallExtractor`**: LSP-powered function call relationship mapping
-- **`VariableExtractor`**: Variable declarations and scope tracking
-- **`ImportExtractor`**: Module dependency mapping with precise positioning
+- **Cross-community impact** — "✅ Contained" vs "⚠️ Crosses N boundaries"
+- **Spine callers** — dedicated section listing callers that are themselves load-bearing files (their changes ripple)
+- **Test files to update** — copy-paste-friendly path list
+- **Production callers** grouped by architectural community, with truncation that always preserves at least one entry per community
+- Risk score in metadata (sortable for tooling, never headlining the prose)
 
-#### **2. Analysis Engine** (`src/analyser/`)
-- **`CodeAnalyzer`**: Main orchestrator for multi-file analysis
-- **Repository Cloning**: Git integration for remote repository analysis
-- **Batch Processing**: Efficient handling of large codebases
-- **LSP Integration**: TypeScript Language Server for semantic analysis
+The verdict is honest: it always includes a caveat that callers via DI / re-export / dynamic dispatch may be missed. **No silent confidently-wrong answers.**
 
-#### **3. Storage & Indexing** (`src/indexer/`, `src/db/`)
-- **`Neo4jClient`**: Graph database operations and relationship storage
-- **`GraphEmbedding`**: Node and relationship embedding generation
-- **`NodeInference`**: AI-powered node classification and enhancement
-- **`CodeVectorStore`**: Vector storage for semantic code search
+---
 
-#### **4. AI Integration** (`src/langchain/`, `src/inference/`)
-- **Multi-Model Support**: OpenAI GPT, Anthropic Claude, Google Gemini, Mistral
-- **Graph-Cypher Service**: AI-powered graph query generation
-- **Embedding Services**: Code and documentation embedding generation
-- **Inference Pipeline**: Automated code understanding and classification
+## 🔧 How it works
 
-#### **5. Query System** (`src/queries/`)
-- **Tree-sitter Queries**: AST pattern matching for code entities
-- **Cypher Queries**: Neo4j graph database queries for relationships
-- **GraphQL Integration**: Structured API for code relationship queries
+```
+Source code
+    │
+    ▼ Tree-sitter parse
+    │
+Graph extraction (functions, classes, calls, imports, routes,
+                  state objects, anonymous handlers, test files)
+    │
+    ▼ stored in
+    │
+Neo4j (with FTS index + vector index for hybrid search)
+    │
+    ▼ Leiden clustering
+    │
+Communities + PageRank + boundary degree → spine files
+    │
+    ▼ exposed via
+    │
+MCP server (10 tools, stdio transport)
+    │
+    ▼
+Claude Code, Cursor, Codex, any MCP client
+```
 
-## 🚀 Quick Start
+### What makes it sharper than `grep` + `Read`
 
-### **Prerequisites**
-- Node.js 18.0.0 or higher
-- Docker (for Neo4j database)
-- Git (for repository cloning)
+| Capability | Native tools | code-lens-aI |
+|---|---|---|
+| "Find code by exact name" | `grep` | `search_code` (also semantic search if `--embed`) |
+| "Show me this function's body" | `cat`/`Read` | `get_definition` (no filesystem access required) |
+| "What calls X?" | `grep -r` (false positives) | `get_callers` (real CALLS edges) |
+| "What does X depend on?" | manual import-tracing | `get_callees` |
+| "What breaks if I change X?" | educated guess | `impact_analysis` with verdict + cross-community + spine |
+| "What architectural subsystems are here?" | manual reading | `get_overview` (Leiden communities + spine files) |
+| "Write me a wiki" | full-day exploration | `generate_wiki` skeleton in 1 call |
 
-### **Installation**
+---
+
+## 🚀 Quick start
+
+### Prerequisites
+
+- Node.js 18+
+- Docker (for Neo4j)
+
+### Setup
+
 ```bash
-# Clone the repository
+# Clone + install
 git clone https://github.com/marvikomo/code-lens-aI.git
 cd code-lens-aI
-
-# Install dependencies
 npm install
 
-# Set up environment variables
-cp .env.example .env
+# Start Neo4j (with APOC + GDS plugins for clustering)
+docker compose up -d neo4j
+
+# Index a codebase + run Leiden clustering
+npm run dev -- /path/to/your/repo --no-json --neo4j-clear --cluster
+
+# (Optional) compute embeddings for semantic + hybrid search (~2-3 min, ~161 MB model)
+npm run dev -- /path/to/your/repo --no-json --embed
 ```
 
-### **Environment Configuration**
+### Wire into Claude Code
+
 ```bash
-# Neo4j Database Configuration
-NEO4J_URI=neo4j://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=your-secure-password
-
-# AI Model Configuration (optional)
-OPENAI_API_KEY=your-openai-api-key
-SUPABASE_URL=your-supabase-url
-SUPABASE_KEY=your-supabase-key
+claude mcp add code-lens-ai \
+  --transport stdio \
+  -e NEO4J_URI=neo4j://localhost:7687 \
+  -e NEO4J_USER=neo4j \
+  -e NEO4J_PASSWORD=password \
+  -- npx ts-node /absolute/path/to/code-lens-aI/src/cli.ts --mcp
 ```
 
-### **Database Setup**
+Then in any Claude Code session inside the indexed project's folder:
+
+```
+Use code-lens-ai to give me an overview of this codebase.
+```
+
+The agent will see 10 tools (`search_code`, `get_definition`, `read_code`, `get_callers`, `get_callees`, `impact_analysis`, `get_overview`, `label_community`, `generate_wiki`, `cypher`) and decide which to use.
+
+---
+
+## 📋 The 10 MCP tools
+
+| Tool | What it answers |
+|---|---|
+| `search_code` | "Find code that does X" — keyword (FTS), semantic (vector), or hybrid (RRF fusion) |
+| `get_definition` | "Show me X's full body and signature" |
+| `read_code` | "Read lines N-M of file Y" — direct, capped at 2000 lines |
+| `get_callers` | "Who calls X?" — graph traversal with depth |
+| `get_callees` | "What does X call?" — outbound graph traversal |
+| `impact_analysis` | "Is it safe to change X?" — verdict-first with spine + test/prod + cross-community |
+| `get_overview` | "What is this codebase?" — counts, languages, top communities, spine files |
+| `label_community` | "Give this architectural subsystem a name" — agent-driven labeling |
+| `generate_wiki` | "Write a wiki" — structural skeleton with [AGENT FILLS] markers |
+| `cypher` | Read-only Cypher escape hatch for advanced queries |
+
+---
+
+## 🛠️ CLI reference
+
 ```bash
-# Start Neo4j with Docker
-npm run neo4j:start
+# General
+ast-graph <repo-path> [options]
 
-# Or use Docker Compose for full stack
-npm run docker:up
+# Analysis
+--no-json              # don't emit graph JSON to stdout
+-o file.json           # write JSON to file
+--ignore foo,bar       # extra directory/file names to skip
+--stats                # print summary stats to stderr
+
+# Neo4j (also reads NEO4J_URI / NEO4J_USER / NEO4J_PASSWORD env vars)
+--neo4j-uri <uri>
+--neo4j-user <name>
+--neo4j-password <pw>
+--neo4j-clear          # DETACH DELETE all :CodeNode before re-indexing
+
+# Clustering (requires Neo4j GDS plugin)
+--cluster              # run Leiden + PageRank + spine selection
+--cluster-only         # skip indexing; just re-cluster (preserves labels)
+--cluster-clear        # wipe community props + labels first
+--cluster-min-size <n> # min files to materialize a :Community node (default 3)
+
+# Embeddings (opt-in; ~161MB model on first run)
+--embed                # compute embeddings for Function/Method/Class nodes
+--embed-model <hf-id>  # override default jinaai/jina-embeddings-v2-base-code
+
+# Search-only mode (no <repo-path> needed)
+--search "<query>"
+--search-mode <m>      # fts | vector | hybrid (auto if omitted)
+--search-limit <n>
+
+# MCP server mode (no <repo-path> needed)
+--mcp                  # stdio MCP server for Claude Code/Cursor
 ```
 
-### **Basic Usage**
-```bash
-# Analyze a local directory
-npm run analyze
+---
 
-# Run in development mode
-npm run dev
+## 🎯 What's actually in the graph
 
-# Run tests
-npm test
-```
+Every indexed codebase gets:
 
-### **Programmatic Usage**
-```typescript
-import { CodeAnalyzer } from './src/analyser/analyser'
-import { LanguageRegistry } from './src/languages/language-registry'
+**Node kinds:** `Repository`, `Folder`, `File`, `Class`, `Interface`, `TypeAlias`, `Enum`, `Function`, `Method`, `Property`, `Variable`, `Community`, `Unresolved`
 
-// Initialize analyzer
-const neo4jConfig = {
-  uri: 'neo4j://localhost:7687',
-  username: 'neo4j',
-  password: 'password'
-}
+**Edge types:** `CONTAINS`, `DEFINES`, `HAS_METHOD`, `HAS_PROPERTY`, `CALLS`, `IMPORTS`, `EXTENDS`, `IMPLEMENTS`, `IN_COMMUNITY`
 
-const languageRegistry = new LanguageRegistry()
-const analyzer = new CodeAnalyzer(neo4jConfig, languageRegistry)
+**Properties on nodes:**
+- Source code: `body`, `signature`, `bodyTruncated`
+- Location: `path`, `startRow`, `endRow`, `startColumn`, `endColumn`, `language`
+- HTTP handlers: `httpMethod`, `route`, `routerObject` (for `router.post(...)` patterns)
+- State/factory: `builder` (for `Annotation.Root({...})`, `z.object({...})`, etc.)
+- Tests: `isTest`, `testFramework` (jest / vitest / bun / junit / pytest detection)
+- Communities: `community` int, `pagerank` float, `boundary` int, `is_core` boolean
+- Embeddings: `embedding` float[768] (when `--embed` was run)
+- FTS: indexed on `name`, `signature`, `body`, `path`
 
-// Analyze a codebase
-await analyzer.analyze('./src', {
-  ignoreDirs: ['node_modules', '.git'],
-  ignoreFiles: ['package-lock.json']
-})
+**What gets uniquely captured that other indexers miss:**
 
-// Clone and analyze remote repository
-await analyzer.cloneRepo('https://github.com/user/repo.git', './repo')
-await analyzer.analyze('./repo')
-```
+- **Anonymous route handlers** — `router.post("/users", async (req, res) => {...})` becomes a first-class `Function` node with `httpMethod: "POST"`, `route: "/users"`, and the handler body indexed for search
+- **State objects** — `export const PlanAgentState = Annotation.Root({...})` becomes a `Variable` node with `builder: "Annotation.Root"` so you can find every state schema in one query
+- **Test files** — detected via AST pattern matching (not just file path), with framework name (`jest` / `vitest` / `bun`)
+- **Architectural communities** — Leiden detection on the file-import subgraph reveals real subsystems with ~80% accuracy on production codebases
 
-## 📊 Supported Code Patterns
+---
 
-### **Import/Export Analysis**
-```javascript
-// ES6 Imports - All patterns supported
-import React, { useState, useEffect } from 'react'
-import * as utils from './utils'
-import type { User } from './types'
-import('./dynamic-module').then(module => {})
+## ⚠️ Honest limitations
 
-// CommonJS - Complete support
-const { readFile, writeFile } = require('fs')
-const express = require('express')
-const { parse } = require('url').parse
+- **No DI / factory wrapper resolution.** `getPrisma().user.findMany()` doesn't link callers back to `prisma`. The `impact_analysis` caveat warns about this every time. Real fix is a v2 detection pass.
+- **No re-export resolution.** `export { foo } from './x'` chains aren't traced through. Same caveat applies.
+- **Single-repo per Neo4j instance.** Multi-repo registry is on the roadmap but not built.
+- **No staleness detection.** If you edit code without re-indexing, agents serve stale info silently.
+- **No incremental re-indexing.** Each `--neo4j-clear` is a full walk. Daily-use friction.
+- **Common-name disambiguation.** If 45 files all define `getSse`, `impact_analysis` picks one via `LIMIT 1`. Pass `file` to disambiguate.
 
-// Export Analysis
-export { default } from './component'
-export const API_URL = 'https://api.example.com'
-export default class MyClass {}
-```
+These are the deferred items in the project's plan. The tool is honest about its limits in every output.
 
-### **Function & Class Analysis**
-```typescript
-// Function analysis with full signature extraction
-async function processUserData(
-  users: User[], 
-  options: ProcessingOptions = {}
-): Promise<ProcessedUser[]> {
-  // Call relationship tracking
-  const results = await Promise.all(
-    users.map(user => transformUser(user, options))
-  )
-  return results.filter(isValidUser)
-}
+---
 
-// Class hierarchy analysis
-class UserService extends BaseService implements IUserService {
-  private apiClient: ApiClient
-  
-  constructor(config: ServiceConfig) {
-    super(config)
-    this.apiClient = new ApiClient(config)
-  }
-  
-  async getUser(id: string): Promise<User> {
-    return this.apiClient.get(`/users/${id}`)
-  }
-}
-```
+## 🏗️ Architecture (one paragraph)
 
-## 🔍 Analysis Capabilities
+The CLI walks a repo, parses each file with **Tree-sitter** (Java + JS/TS), runs language-specific extractors that emit nodes (functions, classes, etc.) and edges (calls, imports) into an in-memory `graphlib` graph. The graph is bulk-pushed to **Neo4j** with a uniqueness constraint on `:CodeNode(id)`. After indexing, the **GDS plugin** runs Leiden community detection + PageRank + boundary degree on the file-IMPORTS subgraph, then per-community spine selection writes `is_core: true` on the most-central files. Optionally, **`@xenova/transformers`** computes 768-dim vector embeddings for Function/Method/Class bodies (jina-base-code model, in-process, ~161 MB). At query time, the **MCP server** exposes 10 tools that translate agent intent into Cypher / FTS / vector queries against this graph and shape the results into either decision-support prose (impact_analysis), structural facts (generate_wiki), or raw data (cypher).
 
-### **Code Entity Extraction**
-| Entity Type | Extracted Information | Relationships |
-|-------------|----------------------|---------------|
-| **Functions** | Signature, parameters, return types, complexity | Calls, called-by, defined-in |
-| **Classes** | Members, inheritance, interfaces | Extends, implements, contains |
-| **Variables** | Type, scope, usage patterns | References, assigned-by |
-| **Imports/Exports** | Source, targets, type (default/named) | Depends-on, provides |
-| **Modules** | Dependencies, exports, file structure | Contains, imports-from |
+---
 
-### **Relationship Analysis**
-- **Call Graphs**: Function-to-function call relationships
-- **Dependency Trees**: Module import/export relationships
-- **Inheritance Chains**: Class hierarchy mapping
-- **Cross-References**: Variable and function usage across files
+## 📁 Project structure
 
-### **AI-Enhanced Features**
-- **Semantic Similarity**: Vector-based code similarity search
-- **Code Classification**: AI-powered categorization of functions and classes
-- **Documentation Generation**: Automated code documentation from analysis
-- **Refactoring Suggestions**: AI-driven code improvement recommendations
-
-## 🛠️ API Reference
-
-### **CodeAnalyzer Class**
-```typescript
-class CodeAnalyzer {
-  // Repository operations
-  async cloneRepo(repoUrl: string, targetPath: string): Promise<void>
-  
-  // Analysis operations
-  async analyze(directory: string, options?: AnalysisOptions): Promise<void>
-  async analyzeFile(filePath: string): Promise<ParsedFile>
-  
-  // Query operations
-  getFunctions(filePath?: string): FunctionNode[]
-  getClasses(filePath?: string): ClassNode[]
-  getCallRelationships(): CallRelationship[]
-}
-```
-
-### **Neo4j Integration**
-```typescript
-class Neo4jClient {
-  // Node operations
-  async upsertNode(nodeData: any): Promise<void>
-  async query(cypher: string, params?: any): Promise<any[]>
-  
-  // Schema operations
-  async getSchema(): Promise<DatabaseSchema>
-  async initializeSchema(): Promise<void>
-}
-```
-
-### **AI Integration**
-```typescript
-class NodeInference {
-  // AI-powered analysis
-  async analyzeNode(nodeData: any): Promise<EnhancedNode>
-  async generateEmbedding(code: string): Promise<number[]>
-  async classifyFunction(functionNode: FunctionNode): Promise<Classification>
-}
-```
-
-## 🧪 Testing
-
-### **Test Suite**
-The project includes comprehensive tests covering:
-- **21 Import Pattern Tests**: All JavaScript/TypeScript import variations
-- **Function Analysis Tests**: Signature extraction and call relationship mapping
-- **Class Hierarchy Tests**: Inheritance and member analysis
-- **Integration Tests**: End-to-end analysis workflows
-
-### **Running Tests**
-```bash
-# Run all tests
-npm test
-
-# Run specific test suite
-npm test -- src/extractor/__tests__/module-level-extractor.test.ts
-
-# Watch mode for development
-npm run test:watch
-
-# Coverage analysis
-npm test -- --coverage
-```
-
-### **Test Coverage Areas**
-- ES6 Imports (default, named, namespace, mixed, side-effect)
-- CommonJS Patterns (require, destructuring, property access)
-- Dynamic Imports (basic and async patterns)
-- Function Call Analysis (direct, indirect, method calls)
-- Class Member Analysis (methods, properties, inheritance)
-
-## 🎯 Use Cases & Applications
-
-### **For AI Development**
-- **Code Copilots**: Enhanced AI assistants with deep code understanding
-- **Automated Refactoring**: AI-driven code transformation and optimization
-- **Intelligent Code Review**: Automated analysis of code changes and impact
-- **Documentation Generation**: AI-powered documentation from code relationships
-
-### **For Development Teams**
-- **Code Navigation**: Understand complex codebases quickly
-- **Dependency Analysis**: Track module dependencies and circular references
-- **Impact Analysis**: Understand the effects of code changes
-- **Architecture Visualization**: Graph-based codebase visualization
-
-### **For DevOps & Architecture**
-- **Dependency Mapping**: Visualize and analyze system dependencies
-- **Bundle Optimization**: Code splitting and tree shaking insights
-- **Performance Analysis**: Identify bottlenecks through call graph analysis
-- **Security Auditing**: Track data flow and potential vulnerability paths
-
-## ⚙️ Configuration
-
-### **Analysis Configuration**
-```typescript
-// Analysis options
-const analysisOptions = {
-  // File patterns
-  ignoreDirs: ['node_modules', '.git', 'dist'],
-  ignoreFiles: ['*.test.js', '*.spec.ts'],
-  
-  // Analysis depth
-  maxCallDepth: 10,
-  enableComplexityAnalysis: true,
-  enableTypeInference: true,
-  
-  // AI features
-  enableEmbeddings: true,
-  enableInference: true,
-  
-  // Performance
-  batchSize: 1000,
-  enableCaching: true
-}
-```
-
-### **Neo4j Configuration**
-```typescript
-const neo4jConfig = {
-  uri: 'neo4j://localhost:7687',
-  username: 'neo4j',
-  password: 'password',
-  database: 'neo4j', // Optional: specific database
-  maxPoolSize: 50,
-  connectionTimeout: 30000
-}
-```
-
-### **AI Model Configuration**
-```typescript
-// Multi-provider AI configuration
-const aiConfig = {
-  openai: {
-    apiKey: process.env.OPENAI_API_KEY,
-    model: 'gpt-4-turbo-preview'
-  },
-  anthropic: {
-    apiKey: process.env.ANTHROPIC_API_KEY,
-    model: 'claude-3-opus-20240229'
-  },
-  google: {
-    apiKey: process.env.GOOGLE_AI_API_KEY,
-    model: 'gemini-pro'
-  }
-}
-```
-
-## 📈 Performance & Scalability
-
-### **Performance Metrics**
-- **Large Codebase** (50k+ files): ~15-30 minutes full analysis
-- **Medium Project** (5k files): ~2-5 minutes analysis
-- **Incremental Updates**: Sub-second for individual file changes
-- **Memory Usage**: ~2-4GB for 100k+ functions in graph
-
-### **Optimization Features**
-- **Incremental Analysis**: Process only changed files
-- **Batch Processing**: Efficient database operations
-- **Connection Pooling**: Optimized database connections
-- **Caching System**: In-memory caching for frequent queries
-- **Parallel Processing**: Multi-threaded analysis for large codebases
-
-### **Scalability Considerations**
-- **Horizontal Scaling**: Multiple analyzer instances
-- **Database Sharding**: Neo4j cluster support
-- **Vector Store**: Supabase for large-scale embeddings
-- **Queue Systems**: Background processing for large repositories
-
-## 🔧 Development & Contributing
-
-### **Development Setup**
-```bash
-# Install development dependencies
-npm install --include=dev
-
-# Run in development mode with hot reload
-npm run dev
-
-# Build the project
-npm run build
-
-# Run linting and formatting
-npm run lint
-npm run format
-```
-
-### **Project Structure**
 ```
 src/
-├── analyser/           # Main analysis engine
-├── extractor/          # Code entity extractors
-├── db/                 # Database clients and schema
-├── indexer/            # AI indexing and embeddings
-├── langchain/          # AI model integration
-├── language-server/    # LSP integration
-├── queries/            # Tree-sitter and Cypher queries
-├── util/               # Utilities and helpers
-├── vector-store/       # Vector storage and search
-└── interfaces/         # TypeScript type definitions
+├── analyser/         # repo-walking + per-file extraction orchestration
+├── extractor/        # per-language tree-sitter walkers (jsts.ts, java.ts, base.ts)
+├── util/             # graph data model, language detection, parser factory
+├── indexers/         # Neo4j bulk-write
+├── clustering/       # Neo4j GDS Leiden + PageRank + spine
+├── embeddings/       # @xenova/transformers wrapper + batch pipeline
+├── search/           # FTS, vector, hybrid (RRF) implementations
+├── mcp/              # MCP server + 10 tool implementations
+└── cli.ts            # entry point — analysis, embeddings, clustering, search, mcp
+scripts/
+├── mcp-smoke.ts          # end-to-end MCP smoke test (10 tools)
+├── mcp-impact-test.ts    # impact_analysis manual harness
+├── mcp-wiki-test.ts      # generate_wiki manual harness
+└── mcp-label-test.ts     # label_community manual harness
 ```
 
-### **Contributing Guidelines**
-1. **Fork the repository** and create a feature branch
-2. **Write comprehensive tests** for new functionality
-3. **Follow TypeScript best practices** and existing code style
-4. **Update documentation** for any API changes or new features
-5. **Ensure all tests pass** before submitting PR
-6. **Add meaningful commit messages** following conventional commits
+---
 
-### **Code Style**
-- Use TypeScript strict mode
-- Follow ESLint and Prettier configurations
-- Write JSDoc comments for public APIs
-- Include unit tests for all new features
-- Maintain backward compatibility when possible
+## 🤝 Contributing
 
-## 🤝 Community & Support
+The project is iterating fast. Real product feedback drives the roadmap — recent shipped features (Verdict-first impact_analysis, agent-driven community labeling, generate_wiki) all came from real-use sessions in Claude Code where gaps surfaced and got planned + shipped within hours.
 
-### **Getting Help**
-- **GitHub Issues**: Bug reports and feature requests
-- **Discussions**: Community questions and use cases
-- **Documentation**: Comprehensive guides and API reference
-- **Examples**: Sample projects and integration guides
+If you find a gap: open an issue with the actual prompt + expected output. The plan files in `~/.claude/plans/` document the design rationale for each shipped capability.
 
-### **Contributing**
-We welcome contributions from the community! Areas where help is needed:
-- Additional language support (Python, Go, Rust)
-- Performance optimizations
-- AI model integrations
-- Documentation improvements
-- Example applications and use cases
+---
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- **Tree-sitter** team for the robust incremental parsing system
-- **Neo4j** team for the powerful graph database platform
-- **LangChain** community for AI integration framework
-- **TypeScript** team for excellent language tooling and LSP support
-- **Open source community** for inspiration, feedback, and contributions
-
----
-
-## 🔗 Related Projects & Integrations
-
-- **[Tree-sitter](https://tree-sitter.github.io/)** - Incremental parsing system for syntax highlighting and code analysis
-- **[Neo4j](https://neo4j.com/)** - Leading graph database for connected data applications
-- **[LangChain](https://langchain.com/)** - Framework for building AI applications with large language models
-- **[TypeScript Language Server](https://github.com/typescript-language-server/typescript-language-server)** - Language Server Protocol implementation for TypeScript
-- **[Supabase](https://supabase.com/)** - Open source alternative to Firebase with vector support
-
----
-
-**Built with ❤️ for better code understanding and AI-powered development experiences.**
-
-*For questions, issues, or contributions, please visit our [GitHub repository](https://github.com/marvikomo/code-lens-aI).*
+MIT
