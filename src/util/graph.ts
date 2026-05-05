@@ -23,7 +23,8 @@ export type NodeKind =
   | "Enum"
   | "Function"
   | "Method"
-  | "Property";
+  | "Property"
+  | "Variable";
 
 export type EdgeKind =
   | "CONTAINS"
@@ -59,6 +60,18 @@ export interface GraphNode {
   body?: string;
   /** True when body is a partial cut at MAX_BODY_BYTES. Absent when full. */
   bodyTruncated?: boolean;
+  /** HTTP verb for handler-arg Function nodes (`router.post(...)` etc). */
+  httpMethod?: string;
+  /** Route path string for handler-arg Function nodes (first string arg). */
+  route?: string;
+  /** The router/object the handler was attached to (e.g. "projectsRouter"). */
+  routerObject?: string;
+  /** For Variable nodes: the builder/factory call (e.g. "Annotation.Root"). */
+  builder?: string;
+  /** True if this File contains test code (detected via AST patterns at index time). */
+  isTest?: boolean;
+  /** Test framework detected (jest / vitest / bun / junit / pytest / etc). */
+  testFramework?: string;
   /** Free-form metadata (modifiers, parameters, etc.) */
   meta?: Record<string, unknown>;
 }
