@@ -6,6 +6,8 @@ import {
   fieldText,
   bodyFields,
   signatureOf,
+  detectJsTestFile,
+  isTestPath,
 } from "./base";
 import type { GraphNode } from "../util/graph";
 
@@ -17,6 +19,15 @@ import type { GraphNode } from "../util/graph";
  */
 export class JsTsExtractor implements LanguageExtractor {
   extract(root: SyntaxNode, ctx: ExtractContext): void {
+    // AST-based test detection. Mutates the file node in place — GraphBuilder
+    // stores nodes by reference, so this is reflected in the materialized graph.
+    const framework =
+      detectJsTestFile(root) ?? (isTestPath(ctx.filePath) ? "unknown" : null);
+    if (framework) {
+      ctx.fileNode.isTest = true;
+      ctx.fileNode.testFramework = framework;
+    }
+
     this.visit(root, ctx, /*enclosing*/ null);
   }
 

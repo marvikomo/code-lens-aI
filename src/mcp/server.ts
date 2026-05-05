@@ -10,6 +10,7 @@ import { registerGetCallees } from "./tools/get-callees";
 import { registerImpactAnalysis } from "./tools/impact-analysis";
 import { registerGetOverview } from "./tools/get-overview";
 import { registerLabelCommunity } from "./tools/label-community";
+import { registerGenerateWiki } from "./tools/generate-wiki";
 import { registerCypher } from "./tools/cypher";
 
 export interface McpServerOptions {
@@ -62,6 +63,7 @@ export async function startMcpServer(opts: McpServerOptions): Promise<void> {
   registerImpactAnalysis(server, ctx);
   registerGetOverview(server, ctx);
   registerLabelCommunity(server, ctx);
+  registerGenerateWiki(server, ctx);
   registerCypher(server, ctx);
 
   const transport = new StdioServerTransport();

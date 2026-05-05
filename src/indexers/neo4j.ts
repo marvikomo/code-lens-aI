@@ -173,6 +173,8 @@ function nodeToRow(n: GraphNode): Record<string, unknown> {
   if (n.route) props.route = n.route;
   if (n.routerObject) props.routerObject = n.routerObject;
   if (n.builder) props.builder = n.builder;
+  if (n.isTest) props.isTest = n.isTest;
+  if (n.testFramework) props.testFramework = n.testFramework;
   if (n.range) {
     props.startRow = n.range.start.row;
     props.startColumn = n.range.start.column;

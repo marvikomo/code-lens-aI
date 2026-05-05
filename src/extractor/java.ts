@@ -6,6 +6,8 @@ import {
   fieldText,
   bodyFields,
   signatureOf,
+  detectJavaTestFile,
+  isTestPath,
 } from "./base";
 import type { GraphNode } from "../util/graph";
 
@@ -16,6 +18,13 @@ import type { GraphNode } from "../util/graph";
  */
 export class JavaExtractor implements LanguageExtractor {
   extract(root: SyntaxNode, ctx: ExtractContext): void {
+    const framework =
+      detectJavaTestFile(root) ?? (isTestPath(ctx.filePath) ? "unknown" : null);
+    if (framework) {
+      ctx.fileNode.isTest = true;
+      ctx.fileNode.testFramework = framework;
+    }
+
     this.visit(root, ctx);
   }
 

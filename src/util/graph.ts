@@ -68,6 +68,10 @@ export interface GraphNode {
   routerObject?: string;
   /** For Variable nodes: the builder/factory call (e.g. "Annotation.Root"). */
   builder?: string;
+  /** True if this File contains test code (detected via AST patterns at index time). */
+  isTest?: boolean;
+  /** Test framework detected (jest / vitest / bun / junit / pytest / etc). */
+  testFramework?: string;
   /** Free-form metadata (modifiers, parameters, etc.) */
   meta?: Record<string, unknown>;
 }
