@@ -4,9 +4,11 @@ import { readQuery, asNumber, textResult, int } from "../util";
 
 const SPINE_PER_COMMUNITY = 5;
 const TOP_FNS_PER_COMMUNITY = 5;
+const EXTERNALS_PER_COMMUNITY = 8;
 const ROUTES_RENDER_CAP = 80;
 const TESTS_RENDER_CAP = 30;
 const GLOSSARY_LIMIT = 50;
+const ORPHANS_RENDER_CAP = 5;
 const SECTION_DIVIDER = "\n\n---\n\n";
 
 interface CommunityRow {
@@ -60,6 +62,18 @@ interface GlossaryEntry {
   callCount: number;
 }
 
+interface ExternalImport {
+  cid: number;
+  spec: string;
+  uses: number;
+}
+
+interface CoverageStats {
+  total: number;
+  clustered: number;
+  orphans: string[];
+}
+
 export function registerGenerateWiki(
   server: McpServer,
   ctx: ToolContext,
@@ -102,6 +116,8 @@ async function runGenerateWiki(
     entryRows,
     testRows,
     glossaryRows,
+    externalRows,
+    coverageRows,
   ] = await Promise.all([
     readQuery(
       ctx,
@@ -182,6 +198,31 @@ async function runGenerateWiki(
               target.path AS path, target.startRow AS startRow, callCount`,
       { limit: int(GLOSSARY_LIMIT) },
     ),
+    readQuery(
+      ctx,
+      // Skip Java stdlib (java.*, javax.*) — every Java file imports it, so it
+      // would dominate the per-community top-N and crowd out actionable signal
+      // like Spring/Hibernate/etc.
+      `MATCH (c:Community)<-[:IN_COMMUNITY]-(:File)-[:IMPORTS]->(u:Unresolved)
+       WHERE u.symbol IS NOT NULL
+         AND NOT u.symbol STARTS WITH 'java.'
+         AND NOT u.symbol STARTS WITH 'javax.'
+       WITH c.communityId AS cid, u.symbol AS spec, count(*) AS uses
+       RETURN cid, spec, uses
+       ORDER BY cid, uses DESC`,
+    ),
+    readQuery(
+      ctx,
+      // Subsystem coverage — files NOT in any materialized :Community are
+      // invisible to every per-subsystem render below. Surface the gap honestly
+      // so the reader can calibrate trust in the wiki's completeness.
+      `MATCH (f:File)
+       OPTIONAL MATCH (f)-[ic:IN_COMMUNITY]->(:Community)
+       WITH count(f) AS total, count(ic) AS clustered,
+            collect(CASE WHEN ic IS NULL THEN f.path END) AS rawOrphans
+       RETURN total, clustered,
+              [p IN rawOrphans WHERE p IS NOT NULL] AS orphans`,
+    ),
   ]);
 
   const repo = repoRows[0] ?? { name: "(unknown)", path: "(unknown)" };
@@ -249,6 +290,21 @@ async function runGenerateWiki(
     callCount: asNumber(r.callCount) ?? 0,
   }));
 
+  const externals: ExternalImport[] = externalRows.map((r) => ({
+    cid: asNumber(r.cid) ?? 0,
+    spec: String(r.spec),
+    uses: asNumber(r.uses) ?? 0,
+  }));
+
+  const coverageRow = coverageRows[0] ?? { total: 0, clustered: 0, orphans: [] };
+  const coverage: CoverageStats = {
+    total: asNumber(coverageRow.total) ?? 0,
+    clustered: asNumber(coverageRow.clustered) ?? 0,
+    orphans: Array.isArray(coverageRow.orphans)
+      ? (coverageRow.orphans as unknown[]).map((p) => String(p))
+      : [],
+  };
+
   return textResult(
     renderWiki({
       repoName: String(repo.name),
@@ -263,6 +319,8 @@ async function runGenerateWiki(
       entries,
       tests,
       glossary,
+      externals,
+      coverage,
     }),
   );
 }
@@ -280,6 +338,8 @@ interface RenderInput {
   entries: string[];
   tests: TestFile[];
   glossary: GlossaryEntry[];
+  externals: ExternalImport[];
+  coverage: CoverageStats;
 }
 
 function renderWiki(d: RenderInput): string {
@@ -331,17 +391,41 @@ function renderWiki(d: RenderInput): string {
   }
   out.push(`**Architectural subsystems:** ${d.communities.length} (Leiden-detected)`);
 
+  // Coverage signal — tells the reader what % of files are visible in the
+  // per-subsystem sections below. Files in unmaterialized (below-threshold)
+  // communities are invisible to the per-community rendering, so surfacing
+  // the gap lets the reader calibrate trust in the wiki's completeness.
+  if (d.coverage.total > 0) {
+    const pct = Math.round((d.coverage.clustered / d.coverage.total) * 100);
+    out.push(
+      `**Files clustered into subsystems:** ${d.coverage.clustered} of ${d.coverage.total} (${pct}%)`,
+    );
+    if (d.coverage.orphans.length > 0) {
+      const shown = d.coverage.orphans.slice(0, ORPHANS_RENDER_CAP);
+      const hidden = d.coverage.orphans.length - shown.length;
+      const list = shown.map((p) => `\`${p}\``).join(", ");
+      const tail =
+        hidden > 0 ? ` (showing ${shown.length} of ${d.coverage.orphans.length})` : "";
+      out.push("");
+      const filesWord = d.coverage.orphans.length === 1 ? "file" : "files";
+      out.push(
+        `> ${d.coverage.orphans.length} ${filesWord} not in any materialized subsystem${tail}: ${list}`,
+      );
+    }
+  }
+
   // ─── Subsystems ────────────────────────────────────────────────────────
   if (d.communities.length > 0) {
     out.push(SECTION_DIVIDER);
     out.push("## Subsystems");
     out.push("");
 
-    // Pre-index spine + topFns + cross by community id.
+    // Pre-index spine + topFns + cross + externals by community id.
     const spineByCid = groupBy(d.spine, (s) => s.cid);
     const topFnsByCid = groupBy(d.topFns, (f) => f.cid);
     const crossByFromId = groupBy(d.cross, (c) => c.fromId);
     const crossByToId = groupBy(d.cross, (c) => c.toId);
+    const externalsByCid = groupBy(d.externals, (e) => e.cid);
 
     for (const c of d.communities) {
       const heading = c.label
@@ -401,6 +485,19 @@ function renderWiki(d: RenderInput): string {
       out.push(
         `**Imported by:** ${importedBy.length > 0 ? importedBy.join(", ") : "(none — outermost layer)"}`,
       );
+
+      // External dependencies (imports to :Unresolved nodes — packages or
+      // out-of-scope paths). Surfaces what the agent would otherwise discover
+      // by grepping `import` statements.
+      const externals = (externalsByCid.get(c.id) ?? [])
+        .sort((a, b) => b.uses - a.uses)
+        .slice(0, EXTERNALS_PER_COMMUNITY);
+      if (externals.length > 0) {
+        const rendered = externals
+          .map((e) => `\`${e.spec}\` (${e.uses}×)`)
+          .join(", ");
+        out.push(`**External deps (not indexed):** ${rendered}`);
+      }
       out.push("");
     }
   }
