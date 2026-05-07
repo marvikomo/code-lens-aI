@@ -10,12 +10,34 @@ import { getParser } from "./../util/parserFactory";
 import { ExtractContext, LanguageExtractor } from "../extractor/base";
 import { JsTsExtractor } from "../extractor/jsts";
 import { JavaExtractor } from "../extractor/java";
+import { sha256OfFile } from "../util/hash";
 
 export interface AnalyzeOptions {
   /** Folder/file names to ignore. Defaults to common build artefacts. */
   ignore?: string[];
   /** Whether to attempt to resolve unresolved CALLS to local Function/Method nodes by name. */
   resolveCallsByName?: boolean;
+}
+
+export interface ScanEntry {
+  absPath: string;
+  language: SupportedLanguage;
+  /** sha256 hex; only populated when `withHashes` is true. */
+  hash?: string;
+}
+
+export interface RepoScan {
+  absRepo: string;
+  files: ScanEntry[];
+}
+
+export interface IncrementalAnalyzeOptions extends AnalyzeOptions {
+  /** File paths to actually parse + extract. Other files exist as path-only references. */
+  extractOnly: Set<string>;
+  /** Pre-computed sha256 hashes by absolute path (only stamped on extracted files). */
+  hashes?: Map<string, string>;
+  /** ISO timestamp to stamp on extracted File nodes' `lastIndexed`. */
+  indexedAt: string;
 }
 
 const DEFAULT_IGNORES = new Set([
@@ -111,6 +133,152 @@ export function analyzeRepository(
   if (opts.resolveCallsByName !== false) {
     resolveCallsByName(builder);
   }
+
+  return builder.build();
+}
+
+/**
+ * Walk the repo and enumerate every supported source file. No parsing — this
+ * is the cheap pre-flight pass used by the incremental indexer to compute
+ * the dirty set vs. stored hashes.
+ */
+export function scanRepository(
+  repoPath: string,
+  opts: { ignore?: string[]; withHashes?: boolean } = {},
+): RepoScan {
+  const absRepo = path.resolve(repoPath);
+  const stat = fs.statSync(absRepo);
+  if (!stat.isDirectory()) throw new Error(`Not a directory: ${absRepo}`);
+
+  const ignores = new Set([...DEFAULT_IGNORES, ...(opts.ignore ?? [])]);
+  const files: ScanEntry[] = [];
+
+  const walk = (dir: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (ignores.has(entry.name) || entry.name.startsWith(".")) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.isFile()) {
+        const lang = detectLanguage(full);
+        if (!lang) continue;
+        const e: ScanEntry = { absPath: full, language: lang };
+        if (opts.withHashes) {
+          try {
+            e.hash = sha256OfFile(full);
+          } catch {
+            // Unreadable file — skip silently; it'll still be tracked by path.
+          }
+        }
+        files.push(e);
+      }
+    }
+  };
+
+  walk(absRepo);
+  return { absRepo, files };
+}
+
+/**
+ * Incremental version of `analyzeRepository`: parses + extracts ONLY the
+ * files in `opts.extractOnly`, while still emitting Repository + Folder
+ * skeletons so CONTAINS edges resolve. Cross-file IMPORTS are resolvable
+ * because we feed the resolver every File path in the repo (extracted
+ * files own real builder nodes; unchanged files appear as phantom path-only
+ * entries that map to Neo4j IDs which already exist from prior runs).
+ */
+export function analyzeIncremental(
+  repoPath: string,
+  opts: IncrementalAnalyzeOptions,
+): CodeGraph {
+  const absRepo = path.resolve(repoPath);
+  const stat = fs.statSync(absRepo);
+  if (!stat.isDirectory()) throw new Error(`Not a directory: ${absRepo}`);
+
+  const ignores = new Set([...DEFAULT_IGNORES, ...(opts.ignore ?? [])]);
+  const builder = new GraphBuilder();
+
+  const repoNode = builder.addNode({
+    id: `repo:${absRepo}`,
+    kind: "Repository",
+    name: path.basename(absRepo),
+    path: absRepo,
+  });
+
+  const pendingImports: ExtractContext["pendingImports"] = [];
+  const fileNodesByAbsPath = new Map<string, GraphNode>();
+
+  // Walk the tree. For files in `extractOnly`: real File nodes + analyseFile.
+  // For other files: phantom GraphNode (id+path only) for import resolution —
+  // never added to the builder so they don't get re-written to Neo4j.
+  const walk = (dir: string, parentNode: GraphNode): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (ignores.has(entry.name) || entry.name.startsWith(".")) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        const folder = builder.addNode({
+          id: `folder:${full}`,
+          kind: "Folder",
+          name: entry.name,
+          path: full,
+        });
+        builder.addEdge({
+          kind: "CONTAINS",
+          from: parentNode.id,
+          to: folder.id,
+        });
+        walk(full, folder);
+      } else if (entry.isFile()) {
+        const lang = detectLanguage(full);
+        if (!lang) continue;
+
+        if (opts.extractOnly.has(full)) {
+          const fileNode = builder.addNode({
+            id: `file:${full}`,
+            kind: "File",
+            name: entry.name,
+            path: full,
+            language: lang,
+            contentHash: opts.hashes?.get(full),
+            lastIndexed: opts.indexedAt,
+          });
+          builder.addEdge({
+            kind: "CONTAINS",
+            from: parentNode.id,
+            to: fileNode.id,
+          });
+          fileNodesByAbsPath.set(full, fileNode);
+          analyzeFile(full, lang, fileNode, builder, pendingImports);
+        } else {
+          // Phantom — used for resolution lookups only.
+          fileNodesByAbsPath.set(full, {
+            id: `file:${full}`,
+            kind: "File",
+            name: entry.name,
+            path: full,
+            language: lang,
+          });
+        }
+      }
+    }
+  };
+
+  walk(absRepo, repoNode);
+
+  resolveImports(pendingImports, fileNodesByAbsPath, builder);
+  if (opts.resolveCallsByName !== false) resolveCallsByName(builder);
 
   return builder.build();
 }

@@ -1,14 +1,18 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
 import type { ToolContext } from "../server";
 import { readQuery, asNumber, textResult, int } from "../util";
 
+// Defaults tuned to fit within typical Claude Code MCP result limits
+// (~15K tokens) on big repos. All overridable via tool args at call time.
 const SPINE_PER_COMMUNITY = 5;
 const TOP_FNS_PER_COMMUNITY = 5;
 const EXTERNALS_PER_COMMUNITY = 8;
 const ROUTES_RENDER_CAP = 80;
 const TESTS_RENDER_CAP = 30;
-const GLOSSARY_LIMIT = 50;
+const GLOSSARY_LIMIT_DEFAULT = 25;
 const ORPHANS_RENDER_CAP = 5;
+const COMMUNITIES_RENDER_CAP_DEFAULT = 15;
 const SECTION_DIVIDER = "\n\n---\n\n";
 
 interface CommunityRow {
@@ -74,6 +78,27 @@ interface CoverageStats {
   orphans: string[];
 }
 
+const inputSchema: Record<string, any> = {
+  maxCommunities: z
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe(
+      "Number of subsystems to render in full detail (default 15). Beyond this, " +
+        "smaller communities collapse to a one-line summary. Increase if your client " +
+        "supports larger results; decrease if you hit MCP result size limits.",
+    ),
+  glossaryLimit: z
+    .number()
+    .int()
+    .min(0)
+    .max(100)
+    .optional()
+    .describe("Number of most-called symbols in the glossary (default 25)."),
+};
+
 export function registerGenerateWiki(
   server: McpServer,
   ctx: ToolContext,
@@ -85,24 +110,28 @@ export function registerGenerateWiki(
       description:
         "Produces a structured markdown wiki with all the STRUCTURAL facts pre-computed: " +
         "per-community spine files, top functions, route inventory, entry points, test breakdown, " +
-        "and a glossary of the 50 most-called symbols. Sections marked [AGENT FILLS] need " +
+        "and a glossary of the most-called symbols. Sections marked [AGENT FILLS] need " +
         "synthesis from you (codebase purpose, per-subsystem narrative, data-flow story). " +
         "Use this as the FIRST tool when asked to write project documentation, a wiki, an " +
         "architecture overview, or a 'what is this codebase' explanation. Saves ~20 exploratory " +
         "tool calls vs. building the wiki from scratch via get_overview + cypher + read_code. " +
         "Returns markdown — read the [AGENT FILLS] sections, do targeted read_code/get_definition " +
-        "calls to fill them, then write the final document.",
-      inputSchema: {},
+        "calls to fill them, then write the final document. " +
+        "Tunable: pass maxCommunities and glossaryLimit to dial output size.",
+      inputSchema,
     },
-    async () => {
-      return await runGenerateWiki(ctx);
+    async (args: { maxCommunities?: number; glossaryLimit?: number }) => {
+      return await runGenerateWiki(ctx, args);
     },
   );
 }
 
 async function runGenerateWiki(
   ctx: ToolContext,
+  args: { maxCommunities?: number; glossaryLimit?: number } = {},
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
+  const maxCommunities = args.maxCommunities ?? COMMUNITIES_RENDER_CAP_DEFAULT;
+  const glossaryLimit = args.glossaryLimit ?? GLOSSARY_LIMIT_DEFAULT;
   // Run the independent queries in parallel — biggest perf win.
   const [
     repoRows,
@@ -196,7 +225,7 @@ async function runGenerateWiki(
        ORDER BY callCount DESC LIMIT $limit
        RETURN target.name AS name, target.signature AS signature,
               target.path AS path, target.startRow AS startRow, callCount`,
-      { limit: int(GLOSSARY_LIMIT) },
+      { limit: int(glossaryLimit) },
     ),
     readQuery(
       ctx,
@@ -321,6 +350,7 @@ async function runGenerateWiki(
       glossary,
       externals,
       coverage,
+      maxCommunities,
     }),
   );
 }
@@ -328,6 +358,7 @@ async function runGenerateWiki(
 interface RenderInput {
   repoName: string;
   repoPath: string;
+  maxCommunities: number;
   counts: { kind: string; count: number }[];
   languages: { language: string; count: number }[];
   communities: CommunityRow[];
@@ -345,6 +376,10 @@ interface RenderInput {
 function renderWiki(d: RenderInput): string {
   const out: string[] = [];
   const unlabeledIds = d.communities.filter((c) => !c.label).map((c) => c.id);
+  // Strip the repo prefix from absolute paths so they render as relative —
+  // saves significant bytes on big repos with deep paths (e.g. langchainjs).
+  const rel = (p: string): string =>
+    p.startsWith(d.repoPath) ? p.slice(d.repoPath.length).replace(/^\/+/, "") : p;
 
   out.push(`# Wiki for \`${d.repoName}\` (skeleton)`);
   out.push("");
@@ -403,7 +438,7 @@ function renderWiki(d: RenderInput): string {
     if (d.coverage.orphans.length > 0) {
       const shown = d.coverage.orphans.slice(0, ORPHANS_RENDER_CAP);
       const hidden = d.coverage.orphans.length - shown.length;
-      const list = shown.map((p) => `\`${p}\``).join(", ");
+      const list = shown.map((p) => `\`${rel(p)}\``).join(", ");
       const tail =
         hidden > 0 ? ` (showing ${shown.length} of ${d.coverage.orphans.length})` : "";
       out.push("");
@@ -427,7 +462,21 @@ function renderWiki(d: RenderInput): string {
     const crossByToId = groupBy(d.cross, (c) => c.toId);
     const externalsByCid = groupBy(d.externals, (e) => e.cid);
 
-    for (const c of d.communities) {
+    // Cap full-detail rendering — the d.communities array is already sorted
+    // by size DESC from the Cypher query, so the top-N are the largest.
+    const fullDetail = d.communities.slice(0, d.maxCommunities);
+    const collapsed = d.communities.slice(d.maxCommunities);
+
+    if (collapsed.length > 0) {
+      out.push(
+        `> ⚠️ Rendering ${fullDetail.length} of ${d.communities.length} subsystems in full detail. ` +
+          `${collapsed.length} smaller subsystem(s) are summarized inline at the end of this section. ` +
+          `Run \`cypher\` if you need full data for them.`,
+      );
+      out.push("");
+    }
+
+    for (const c of fullDetail) {
       const heading = c.label
         ? `### \`${c.label}\` (community ${c.id}, ${c.size} files)`
         : `### community-${c.id} (UNLABELED, ${c.size} files)`;
@@ -450,7 +499,7 @@ function renderWiki(d: RenderInput): string {
       if (spine.length === 0) {
         out.push("- (none flagged is_core in this community)");
       } else {
-        for (const s of spine) out.push(`- \`${s.name}\` — ${s.path}`);
+        for (const s of spine) out.push(`- \`${s.name}\` — ${rel(s.path)}`);
       }
       out.push("");
 
@@ -467,7 +516,7 @@ function renderWiki(d: RenderInput): string {
           const sig = f.signature
             ? f.signature.split("\n")[0].trim().slice(0, 100)
             : f.name;
-          out.push(`- \`${sig}\` — ${f.path}:${f.startRow + 1} (called ${f.callCount}×)`);
+          out.push(`- \`${sig}\` — ${rel(f.path)}:${f.startRow + 1} (called ${f.callCount}×)`);
         }
       }
       out.push("");
@@ -500,6 +549,23 @@ function renderWiki(d: RenderInput): string {
       }
       out.push("");
     }
+
+    // Collapsed summary of the smaller subsystems we didn't render in full.
+    if (collapsed.length > 0) {
+      out.push(`### Smaller subsystems (${collapsed.length} not detailed)`);
+      out.push("");
+      out.push(
+        `These communities exist in the graph but were collapsed to keep the wiki within size limits. ` +
+          `Listed by size descending; use \`cypher\` to inspect any of them in detail.`,
+      );
+      out.push("");
+      for (const c of collapsed) {
+        const name = c.label ? `\`${c.label}\`` : `community-${c.id}`;
+        const filesWord = c.size === 1 ? "file" : "files";
+        out.push(`- ${name} (community ${c.id}, ${c.size} ${filesWord})`);
+      }
+      out.push("");
+    }
   }
 
   // ─── HTTP routes ───────────────────────────────────────────────────────
@@ -510,7 +576,7 @@ function renderWiki(d: RenderInput): string {
     out.push("| Method | Route | File |");
     out.push("|---|---|---|");
     for (const r of d.routes.slice(0, ROUTES_RENDER_CAP)) {
-      const file = `${r.path}:${r.startRow + 1}`;
+      const file = `${rel(r.path)}:${r.startRow + 1}`;
       out.push(`| ${r.method} | ${r.route || "(no path)"} | ${file} |`);
     }
     if (d.routes.length > ROUTES_RENDER_CAP) {
@@ -527,7 +593,7 @@ function renderWiki(d: RenderInput): string {
   } else {
     out.push("Files that nothing else in the indexed graph imports — likely application starts:");
     out.push("");
-    for (const p of d.entries.slice(0, 20)) out.push(`- \`${p}\``);
+    for (const p of d.entries.slice(0, 20)) out.push(`- \`${rel(p)}\``);
     if (d.entries.length > 20) out.push(`\n*… ${d.entries.length - 20} more.*`);
   }
 
@@ -551,7 +617,7 @@ function renderWiki(d: RenderInput): string {
     out.push("");
     out.push("**Files:**");
     for (const t of d.tests.slice(0, TESTS_RENDER_CAP)) {
-      out.push(`- \`${t.path}\` (${t.framework ?? "?"})`);
+      out.push(`- \`${rel(t.path)}\` (${t.framework ?? "?"})`);
     }
     if (d.tests.length > TESTS_RENDER_CAP) {
       out.push(`\n*… ${d.tests.length - TESTS_RENDER_CAP} more truncated.*`);
@@ -590,7 +656,7 @@ function renderWiki(d: RenderInput): string {
     const sig = g.signature
       ? g.signature.split("\n")[0].trim().slice(0, 120)
       : g.name;
-    out.push(`- **\`${g.name}\`** (${g.callCount}×) — \`${sig}\` — ${g.path}:${g.startRow + 1}`);
+    out.push(`- **\`${g.name}\`** (${g.callCount}×) — \`${sig}\` — ${rel(g.path)}:${g.startRow + 1}`);
   }
 
   return out.join("\n");

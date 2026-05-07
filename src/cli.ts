@@ -3,12 +3,35 @@ import "dotenv/config";
 import fs from "fs";
 import path from "path";
 import neo4j from "neo4j-driver";
-import { analyzeRepository } from "./analyser/analyser";
+import {
+  analyzeRepository,
+  scanRepository,
+  analyzeIncremental,
+} from "./analyser/analyser";
 import { indexToNeo4j } from "./indexers/neo4j";
+import {
+  deleteFilesByPath,
+  getDependents,
+  getFileHashes,
+  getRepositoryMeta,
+  setRepositoryMeta,
+  type IncrementalCtx,
+} from "./indexers/neo4j-incremental";
 import { clusterInNeo4j } from "./clustering/neo4j-leiden";
 import { computeAndStoreEmbeddings } from "./embeddings/pipeline";
 import { search, type SearchMode } from "./search";
 import { startMcpServer } from "./mcp/server";
+import { resolveSource } from "./util/repo-source";
+import {
+  gitCommitDelta,
+  gitHeadCommit,
+  gitIsAncestor,
+  gitWorkingTreeClean,
+  gitWorkingTreeDelta,
+  isGitRepo,
+  mergeDeltas,
+  type GitDelta,
+} from "./util/git";
 
 interface CliArgs {
   repo: string;
@@ -25,6 +48,8 @@ interface CliArgs {
   neo4jDatabase?: string;
   neo4jClear: boolean;
   neo4jSkipUnresolved: boolean;
+  // Incremental indexing
+  incremental: boolean;
   // Clustering
   cluster: boolean;
   clusterOnly: boolean;
@@ -54,6 +79,7 @@ function parseArgs(argv: string[]): CliArgs {
     noJson: false,
     neo4jClear: false,
     neo4jSkipUnresolved: false,
+    incremental: false,
     cluster: false,
     clusterOnly: false,
     clusterClear: false,
@@ -100,6 +126,9 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       case "--neo4j-skip-unresolved":
         args.neo4jSkipUnresolved = true;
+        break;
+      case "--incremental":
+        args.incremental = true;
         break;
       case "--cluster":
         args.cluster = true;
@@ -179,7 +208,11 @@ function printHelp(): void {
     `ast-graph - build a code graph from a repository (JS/TS/Java)
 
 Usage:
-  ast-graph <repo-path> [options]
+  ast-graph <repo-path-or-git-url> [options]
+
+  When given a git URL (https://, git@, ssh://), the tool clones into
+  ~/.code-lens-aI/cache/<host>/<owner>/<name>/ and indexes from there.
+  Re-running with the same URL syncs the clone before indexing.
 
 General:
   -o, --out <file>             Write JSON to file (default: stdout)
@@ -196,6 +229,9 @@ Neo4j (also reads NEO4J_URI / NEO4J_USER / NEO4J_PASSWORD / NEO4J_DATABASE):
       --neo4j-database <name>
       --neo4j-clear            DETACH DELETE all :CodeNode before indexing
       --neo4j-skip-unresolved  Skip edges whose target was never resolved
+      --incremental            Re-index only changed files (git-aware when
+                               target is a git repo; sha256-based otherwise).
+                               Cascades to dependents so CALLS edges stay correct.
 
 Clustering (requires Neo4j + GDS plugin; runs after indexing):
       --cluster                Run Leiden community detection on File-IMPORTS
@@ -260,6 +296,20 @@ async function main(): Promise<void> {
 
   if (searchOnly) {
     await runSearch(args);
+    return;
+  }
+
+  // Repo source resolution — accepts a path or a git URL. If URL, clones into
+  // ~/.code-lens-aI/cache/ and rewrites args.repo to point there.
+  const resolved = resolveSource(args.repo);
+  args.repo = resolved.localPath;
+  const sourceUrl = resolved.sourceUrl;
+
+  // Incremental mode runs its own pipeline: scan, diff, scoped delete, partial
+  // re-extract, push, then re-resolve. Returns early so the full-walk path
+  // below doesn't run.
+  if (args.incremental) {
+    await runIncremental(args, sourceUrl);
     return;
   }
 
@@ -370,6 +420,237 @@ async function main(): Promise<void> {
   // ── Search ─────────────────────────────────────────────────────────
   if (args.searchQuery) {
     await runSearch(args);
+  }
+}
+
+/**
+ * Incremental indexing pipeline. Two change-detection modes:
+ *   - Mode A (git): use `git diff` + `git status` to identify dirty files.
+ *   - Mode B (hash): sha256 each walked file, compare to stored f.contentHash.
+ * After identifying the dirty set, cascade to dependents (importers + callers
+ * into the changed files) so CALLS edges from unchanged callers stay correct,
+ * scope-delete the affected subgraphs, partially re-extract, then push.
+ */
+async function runIncremental(
+  args: CliArgs,
+  sourceUrl: string | undefined,
+): Promise<void> {
+  if (!args.neo4jUri || !args.neo4jUser || !args.neo4jPassword) {
+    console.error(
+      "[ast-graph] --incremental requires Neo4j credentials (--neo4j-uri / --neo4j-user / --neo4j-password)",
+    );
+    process.exit(2);
+  }
+  const ctx: IncrementalCtx = {
+    uri: args.neo4jUri,
+    user: args.neo4jUser,
+    password: args.neo4jPassword,
+    database: args.neo4jDatabase,
+  };
+  const absRepo = path.resolve(args.repo);
+  const indexedAt = new Date().toISOString();
+
+  // ── Step 1: detect change-detection mode ────────────────────────────
+  const repoMeta = await getRepositoryMeta(ctx, absRepo);
+  const useGit = isGitRepo(absRepo);
+  const headCommit = useGit ? gitHeadCommit(absRepo) : null;
+
+  // Fast path: git repo, prior commit known + reachable, working tree clean.
+  if (
+    useGit &&
+    repoMeta?.lastCommit &&
+    headCommit &&
+    repoMeta.lastCommit === headCommit &&
+    gitWorkingTreeClean(absRepo)
+  ) {
+    console.error(
+      `[ast-graph] already up to date at ${headCommit.slice(0, 12)} (commit + clean tree)`,
+    );
+    return;
+  }
+
+  // ── Step 2: compute raw delta ───────────────────────────────────────
+  let changed: string[] = [];
+  let added: string[] = [];
+  let deleted: string[] = [];
+  let modeUsed: "git" | "hash" | "cold" = "cold";
+
+  const useGitDelta =
+    useGit &&
+    !!repoMeta?.lastCommit &&
+    !!headCommit &&
+    gitIsAncestor(absRepo, repoMeta.lastCommit);
+
+  if (useGitDelta) {
+    modeUsed = "git";
+    const committed = gitCommitDelta(absRepo, repoMeta!.lastCommit!);
+    const working: GitDelta = gitWorkingTreeDelta(absRepo);
+    const merged = mergeDeltas(committed, working);
+    // Keep only files we'd actually index (have a detectable language).
+    const scan = scanRepository(absRepo, { ignore: args.ignore });
+    const indexable = new Set(scan.files.map((f) => f.absPath));
+    changed = merged.changed.filter((p) => indexable.has(p));
+    added = merged.added.filter((p) => indexable.has(p));
+    deleted = merged.deleted; // may include files not in `indexable` — we still need to clean them up by path
+    console.error(
+      `[ast-graph] git delta: ${changed.length} changed, ${added.length} added, ${deleted.length} deleted`,
+    );
+  } else {
+    // Mode B (hash) — also handles cold cache (no prior repo meta).
+    const isCold = !repoMeta;
+    modeUsed = isCold ? "cold" : "hash";
+    const scan = scanRepository(absRepo, { ignore: args.ignore, withHashes: true });
+    const onDisk = new Map<string, string>(); // absPath → hash
+    const langByPath = new Map<string, string>();
+    for (const f of scan.files) {
+      if (f.hash) onDisk.set(f.absPath, f.hash);
+      langByPath.set(f.absPath, f.language);
+    }
+    const stored = isCold ? new Map<string, string>() : await getFileHashes(ctx, absRepo);
+    for (const [p, h] of onDisk) {
+      const prev = stored.get(p);
+      if (prev === undefined) added.push(p);
+      else if (prev !== h) changed.push(p);
+    }
+    for (const p of stored.keys()) {
+      if (!onDisk.has(p)) deleted.push(p);
+    }
+    console.error(
+      `[ast-graph] ${modeUsed} delta: ${changed.length} changed, ${added.length} added, ${deleted.length} deleted`,
+    );
+  }
+
+  if (changed.length + added.length + deleted.length === 0) {
+    console.error("[ast-graph] no changes detected");
+    await setRepositoryMeta(ctx, absRepo, {
+      indexedAt,
+      lastCommit: headCommit,
+      sourceUrl,
+    });
+    return;
+  }
+
+  // ── Step 3: dependents cascade ──────────────────────────────────────
+  // Look up files that import or call into the changed/deleted set so their
+  // stale CALLS edges get re-resolved against the new node IDs.
+  const cascadeSeed = [...changed, ...deleted];
+  const dependents = await getDependents(ctx, cascadeSeed);
+  for (const p of changed) dependents.delete(p);
+  for (const p of added) dependents.delete(p);
+  console.error(
+    `[ast-graph] cascade: ${dependents.size} dependent file(s) will be re-extracted`,
+  );
+
+  // Final dirty set: files we'll re-extract from disk.
+  const toExtract = new Set<string>([...changed, ...added, ...dependents]);
+  // Files whose graph subtree we'll DETACH DELETE before writing new state.
+  const toDelete = new Set<string>([...changed, ...dependents, ...deleted]);
+
+  // ── Step 4: scope-delete old subgraphs ──────────────────────────────
+  if (toDelete.size > 0) {
+    const { deletedNodes } = await deleteFilesByPath(ctx, [...toDelete]);
+    console.error(
+      `[ast-graph] scope-deleted ${deletedNodes} symbol+file node(s) across ${toDelete.size} file(s)`,
+    );
+  }
+
+  // ── Step 5: re-extract dirty files ──────────────────────────────────
+  const hashesForExtract = new Map<string, string>();
+  if (modeUsed === "git") {
+    // We didn't compute hashes in git mode; compute them now for the extract set
+    // so File nodes always carry an up-to-date hash (Mode B fallback works later).
+    const { sha256OfFile } = await import("./util/hash");
+    for (const p of toExtract) {
+      try {
+        hashesForExtract.set(p, sha256OfFile(p));
+      } catch {
+        // missing file — should already be in `deleted` set; skip
+      }
+    }
+  } else {
+    // Hash mode already scanned with hashes; re-scan to recover the map.
+    const rescan = scanRepository(absRepo, { ignore: args.ignore, withHashes: true });
+    for (const f of rescan.files) {
+      if (toExtract.has(f.absPath) && f.hash) hashesForExtract.set(f.absPath, f.hash);
+    }
+  }
+
+  let graphSummary = { nodesWritten: 0, edgesWritten: 0 };
+  if (toExtract.size > 0) {
+    console.error(
+      `[ast-graph] extracting ${toExtract.size} file(s) ...`,
+    );
+    const graph = analyzeIncremental(absRepo, {
+      ignore: args.ignore,
+      resolveCallsByName: !args.noResolveCalls,
+      extractOnly: toExtract,
+      hashes: hashesForExtract,
+      indexedAt,
+    });
+
+    if (args.stats) {
+      const counts: Record<string, number> = {};
+      for (const n of graph.nodes) counts[n.kind] = (counts[n.kind] ?? 0) + 1;
+      const eCounts: Record<string, number> = {};
+      for (const e of graph.edges) eCounts[e.kind] = (eCounts[e.kind] ?? 0) + 1;
+      console.error("[ast-graph] node counts:", counts);
+      console.error("[ast-graph] edge counts:", eCounts);
+    }
+
+    // Push without --neo4j-clear; MERGE semantics handle the partial graph.
+    graphSummary = await indexToNeo4j(graph, {
+      uri: args.neo4jUri,
+      user: args.neo4jUser,
+      password: args.neo4jPassword,
+      database: args.neo4jDatabase,
+      clear: false,
+      skipUnresolved: args.neo4jSkipUnresolved,
+    });
+    console.error(
+      `[ast-graph] pushed ${graphSummary.nodesWritten} nodes, ${graphSummary.edgesWritten} edges`,
+    );
+  }
+
+  // ── Step 6: stamp repo meta ─────────────────────────────────────────
+  await setRepositoryMeta(ctx, absRepo, {
+    indexedAt,
+    lastCommit: headCommit,
+    sourceUrl,
+  });
+
+  // ── Optional clustering / embeddings ────────────────────────────────
+  if (args.cluster) {
+    console.error("[ast-graph] running Leiden clustering ...");
+    const report = await clusterInNeo4j({
+      uri: args.neo4jUri,
+      user: args.neo4jUser,
+      password: args.neo4jPassword,
+      database: args.neo4jDatabase,
+      clear: args.clusterClear,
+      spinePagerank: args.clusterSpinePagerank,
+      spineBoundary: args.clusterSpineBoundary,
+      minSize: args.clusterMinSize,
+    });
+    console.error(
+      `[ast-graph] clusters: ${report.communities} found, ` +
+        `${report.materialized} materialized (size >= ${args.clusterMinSize ?? 3}), ` +
+        `${report.spineNodes} spine files (${report.filesScored} files scored)`,
+    );
+  }
+  if (args.embed) {
+    console.error("[ast-graph] computing embeddings ...");
+    const report = await computeAndStoreEmbeddings({
+      uri: args.neo4jUri,
+      user: args.neo4jUser,
+      password: args.neo4jPassword,
+      database: args.neo4jDatabase,
+      model: args.embedModel,
+      batchSize: args.embedBatch,
+    });
+    console.error(
+      `[ast-graph] embedded ${report.embedded}/${report.totalCandidates} nodes ` +
+        `(skipped ${report.skipped}) in ${(report.durationMs / 1000).toFixed(1)}s`,
+    );
   }
 }
 
