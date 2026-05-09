@@ -105,6 +105,13 @@ export async function clusterInNeo4j(
 
     // 3. Native projection — :File nodes + :IMPORTS edges, undirected.
     // :IMPORTS → :Unresolved is auto-skipped (Unresolved isn't in the node set).
+    //
+    // Note (2026-05): we tried using gds.leiden.write's `seedProperty` to
+    // preserve community IDs across re-runs (per the architecture-recovery
+    // literature). GDS's implementation produced runaway over-merging
+    // (back-to-back runs collapsed 99% of files into one community), and
+    // placeholder seed values leaked into the output. Reverted; ID stability
+    // will be handled via post-clustering Jaccard label migration instead.
     await run(
       `CALL gds.graph.project($name, 'File',
          { IMPORTS: { orientation: 'UNDIRECTED' } })`,
@@ -153,6 +160,15 @@ export async function clusterInNeo4j(
       { k: neo4j.int(spineBoundary) },
     );
 
+    // 8a. Drop all :Community nodes from prior runs — Leiden assigns fresh
+    //     community IDs on each unseeded run, so old :Community nodes would
+    //     accumulate (and old labels would attach to the wrong files).
+    //     Cheap to drop + re-materialize in step 8 since size/heuristicLabel
+    //     are recomputed there. Existing labels/descriptions DO get wiped
+    //     here — that's the trade-off the rolled-back seedProperty was
+    //     trying to avoid; label stability handled separately by item #1'.
+    await run(`MATCH (c:Community) DETACH DELETE c`);
+
     // 8. Materialize :Community nodes for groups with size >= minSize.
     await run(
       `MATCH (f:File) WHERE f.community IS NOT NULL
@@ -166,6 +182,41 @@ export async function clusterInNeo4j(
        UNWIND members AS f
        MERGE (f)-[:IN_COMMUNITY]->(c)`,
       { minSize: neo4j.int(minSize) },
+    );
+
+    // 8b. Heuristic label per community — most-common informative folder
+    //     segment among member file paths, scoped to the path WITHIN the
+    //     repo (otherwise the user's home folder dominates every label).
+    //     Used as a fallback when no semantic label has been set via the
+    //     `label_community` MCP tool. Always recomputed so it tracks
+    //     current files. Example: /Users/x/repo/libs/auth/login.ts →
+    //     stripped to "libs/auth/login.ts" → label "auth" (libs is
+    //     in the stop-list, ".ts" segment is filtered out).
+    await run(
+      `MATCH (r:Repository) WITH r.path AS repoPath LIMIT 1
+       MATCH (c:Community)<-[:IN_COMMUNITY]-(f:File)
+       WITH c, repoPath,
+            CASE WHEN f.path STARTS WITH repoPath
+                 THEN substring(f.path, size(repoPath))
+                 ELSE f.path END AS relPath
+       WITH c, split(relPath, '/') AS segs
+       UNWIND segs AS seg
+       WITH c, seg
+       WHERE seg <> ''
+         AND NOT seg CONTAINS '.'
+         AND size(seg) > 1
+         AND NOT seg IN [
+           'src', 'lib', 'libs', 'dist', 'build', 'out', 'bin',
+           'app', 'pkg', 'packages', 'node_modules', 'vendor', 'target',
+           'index', 'main',
+           'tests', 'test', '__tests__', 'spec', '__mocks__', 'mocks',
+           'common', 'shared', 'public', 'private', 'internal'
+         ]
+       WITH c, seg, count(*) AS n
+       ORDER BY n DESC
+       WITH c, collect(seg)[0] AS heuristic
+       WHERE heuristic IS NOT NULL
+       SET c.heuristicLabel = heuristic`,
     );
 
     // 9. Build report.

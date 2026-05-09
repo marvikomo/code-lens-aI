@@ -18,7 +18,11 @@ const SECTION_DIVIDER = "\n\n---\n\n";
 interface CommunityRow {
   id: number;
   label: string | null;
+  heuristicLabel: string | null;
   description: string | null;
+  descriptionWrittenAt: string | null;
+  descriptionSpineSnapshot: string[];
+  currentSpine: string[];
   size: number;
 }
 
@@ -41,8 +45,10 @@ interface TopFn {
 interface CrossEdge {
   fromId: number;
   fromLabel: string | null;
+  fromHeuristic: string | null;
   toId: number;
   toLabel: string | null;
+  toHeuristic: string | null;
   count: number;
 }
 
@@ -168,9 +174,15 @@ async function runGenerateWiki(
     readQuery(
       ctx,
       `MATCH (c:Community)<-[:IN_COMMUNITY]-(f:File)
-       WITH c, count(f) AS size
+       OPTIONAL MATCH (c)<-[:IN_COMMUNITY]-(curSpine:File {is_core: true})
+       WITH c, count(DISTINCT f) AS size,
+            collect(DISTINCT curSpine.path) AS currentSpine
        RETURN c.communityId AS id, c.label AS label,
-              c.description AS description, size
+              c.heuristicLabel AS heuristicLabel,
+              c.description AS description,
+              c.descriptionWrittenAt AS descriptionWrittenAt,
+              c.descriptionSpineSnapshot AS descriptionSpineSnapshot,
+              currentSpine, size
        ORDER BY size DESC`,
     ),
     readQuery(
@@ -196,7 +208,9 @@ async function runGenerateWiki(
       `MATCH (c1:Community)<-[:IN_COMMUNITY]-(:File)-[:IMPORTS]->(:File)-[:IN_COMMUNITY]->(c2:Community)
        WHERE c1 <> c2
        RETURN c1.communityId AS fromId, c1.label AS fromLabel,
+              c1.heuristicLabel AS fromHeuristic,
               c2.communityId AS toId, c2.label AS toLabel,
+              c2.heuristicLabel AS toHeuristic,
               count(*) AS count`,
     ),
     readQuery(
@@ -269,7 +283,16 @@ async function runGenerateWiki(
   const communities: CommunityRow[] = communityRows.map((r) => ({
     id: asNumber(r.id) ?? 0,
     label: (r.label as string | null) ?? null,
+    heuristicLabel: (r.heuristicLabel as string | null) ?? null,
     description: (r.description as string | null) ?? null,
+    descriptionWrittenAt:
+      (r.descriptionWrittenAt as string | null) ?? null,
+    descriptionSpineSnapshot: Array.isArray(r.descriptionSpineSnapshot)
+      ? (r.descriptionSpineSnapshot as unknown[]).map(String)
+      : [],
+    currentSpine: Array.isArray(r.currentSpine)
+      ? (r.currentSpine as unknown[]).map(String)
+      : [],
     size: asNumber(r.size) ?? 0,
   }));
 
@@ -292,8 +315,10 @@ async function runGenerateWiki(
   const cross: CrossEdge[] = crossRows.map((r) => ({
     fromId: asNumber(r.fromId) ?? 0,
     fromLabel: (r.fromLabel as string | null) ?? null,
+    fromHeuristic: (r.fromHeuristic as string | null) ?? null,
     toId: asNumber(r.toId) ?? 0,
     toLabel: (r.toLabel as string | null) ?? null,
+    toHeuristic: (r.toHeuristic as string | null) ?? null,
     count: asNumber(r.count) ?? 0,
   }));
 
@@ -375,11 +400,33 @@ interface RenderInput {
 
 function renderWiki(d: RenderInput): string {
   const out: string[] = [];
-  const unlabeledIds = d.communities.filter((c) => !c.label).map((c) => c.id);
   // Strip the repo prefix from absolute paths so they render as relative —
   // saves significant bytes on big repos with deep paths (e.g. langchainjs).
   const rel = (p: string): string =>
     p.startsWith(d.repoPath) ? p.slice(d.repoPath.length).replace(/^\/+/, "") : p;
+
+  // Label fallback chain — agent-set label > heuristic folder name > nothing.
+  // Agents see "(heuristic)" tag on heading so they know it's auto-derived
+  // and can be upgraded via label_community.
+  const heuristicOnly = d.communities.filter(
+    (c) => !c.label && c.heuristicLabel,
+  ).length;
+  const trulyUnlabeled = d.communities.filter(
+    (c) => !c.label && !c.heuristicLabel,
+  );
+
+  const headingFor = (c: CommunityRow): string => {
+    if (c.label) return `### \`${c.label}\` (community ${c.id}, ${c.size} files)`;
+    if (c.heuristicLabel)
+      return `### \`${c.heuristicLabel}\` (community ${c.id}, ${c.size} files, heuristic)`;
+    return `### community-${c.id} (UNLABELED, ${c.size} files)`;
+  };
+
+  const xrefName = (
+    label: string | null,
+    heuristic: string | null,
+    id: number,
+  ): string => label ?? heuristic ?? `community-${id}`;
 
   out.push(`# Wiki for \`${d.repoName}\` (skeleton)`);
   out.push("");
@@ -393,12 +440,31 @@ function renderWiki(d: RenderInput): string {
       "All `[AGENT FILLS]` markers are prose you should write.",
   );
 
-  if (unlabeledIds.length > 0) {
+  if (heuristicOnly > 0 || trulyUnlabeled.length > 0) {
     out.push("");
+    const parts: string[] = [];
+    if (heuristicOnly > 0) {
+      parts.push(
+        `${heuristicOnly} use heuristic folder-name labels (auto-derived)`,
+      );
+    }
+    if (trulyUnlabeled.length > 0) {
+      const ids = trulyUnlabeled
+        .slice(0, 12)
+        .map((c) => c.id)
+        .join(", ");
+      const tail =
+        trulyUnlabeled.length > 12
+          ? `, … +${trulyUnlabeled.length - 12} more`
+          : "";
+      parts.push(
+        `${trulyUnlabeled.length} are fully unlabeled (IDs: ${ids}${tail})`,
+      );
+    }
     out.push(
-      `> ⚠️ ${unlabeledIds.length} of ${d.communities.length} communities are unlabeled ` +
-        `(IDs: ${unlabeledIds.join(", ")}). Run \`label_community\` for each before generating ` +
-        `the final wiki — the subsystem section headings will read better with semantic names.`,
+      `> ⚠️ Of ${d.communities.length} subsystems: ${parts.join("; ")}. ` +
+        `Run \`label_community\` to upgrade to semantic names; heuristic labels ` +
+        `track current folder structure but lack semantic meaning.`,
     );
   }
 
@@ -477,14 +543,17 @@ function renderWiki(d: RenderInput): string {
     }
 
     for (const c of fullDetail) {
-      const heading = c.label
-        ? `### \`${c.label}\` (community ${c.id}, ${c.size} files)`
-        : `### community-${c.id} (UNLABELED, ${c.size} files)`;
-      out.push(heading);
+      out.push(headingFor(c));
       out.push("");
 
       if (c.description) {
         out.push(`**Purpose:** ${c.description}`);
+        const freshness = describeDescriptionFreshness(
+          c.descriptionWrittenAt,
+          c.descriptionSpineSnapshot,
+          c.currentSpine,
+        );
+        if (freshness) out.push(`> ${freshness}`);
       } else {
         out.push("**Purpose:** [AGENT FILLS — 1 paragraph inferred from spine files below]");
       }
@@ -523,10 +592,10 @@ function renderWiki(d: RenderInput): string {
 
       // Cross-community.
       const importsFrom = (crossByFromId.get(c.id) ?? [])
-        .map((e) => e.toLabel ?? `community-${e.toId}`)
+        .map((e) => xrefName(e.toLabel, e.toHeuristic, e.toId))
         .filter((s, i, arr) => arr.indexOf(s) === i);
       const importedBy = (crossByToId.get(c.id) ?? [])
-        .map((e) => e.fromLabel ?? `community-${e.fromId}`)
+        .map((e) => xrefName(e.fromLabel, e.fromHeuristic, e.fromId))
         .filter((s, i, arr) => arr.indexOf(s) === i);
       out.push(
         `**Imports from:** ${importsFrom.length > 0 ? importsFrom.join(", ") : "(self-contained)"}`,
@@ -560,9 +629,13 @@ function renderWiki(d: RenderInput): string {
       );
       out.push("");
       for (const c of collapsed) {
-        const name = c.label ? `\`${c.label}\`` : `community-${c.id}`;
+        const display = c.label
+          ? `\`${c.label}\``
+          : c.heuristicLabel
+            ? `\`${c.heuristicLabel}\` (heuristic)`
+            : `community-${c.id}`;
         const filesWord = c.size === 1 ? "file" : "files";
-        out.push(`- ${name} (community ${c.id}, ${c.size} ${filesWord})`);
+        out.push(`- ${display} (community ${c.id}, ${c.size} ${filesWord})`);
       }
       out.push("");
     }
@@ -640,8 +713,8 @@ function renderWiki(d: RenderInput): string {
     out.push("|---|---|---|");
     const sortedCross = [...d.cross].sort((a, b) => b.count - a.count).slice(0, 15);
     for (const c of sortedCross) {
-      const from = c.fromLabel ?? `community-${c.fromId}`;
-      const to = c.toLabel ?? `community-${c.toId}`;
+      const from = xrefName(c.fromLabel, c.fromHeuristic, c.fromId);
+      const to = xrefName(c.toLabel, c.toHeuristic, c.toId);
       out.push(`| ${from} | ${to} | ${c.count} |`);
     }
   }
@@ -660,6 +733,46 @@ function renderWiki(d: RenderInput): string {
   }
 
   return out.join("\n");
+}
+
+/**
+ * Build a freshness annotation for an agent-written community description.
+ * Combines wall-clock age (from `descriptionWrittenAt`) with spine-file
+ * drift (snapshot taken at write-time vs. current spine). Returns null when
+ * there's nothing to flag — keeps the wiki output uncluttered for fresh,
+ * stable summaries. Mirror of the same helper in get-overview.ts; kept
+ * inline rather than shared because the surface is tiny.
+ */
+function describeDescriptionFreshness(
+  writtenAt: string | null,
+  snapshot: string[],
+  currentSpine: string[],
+): string | null {
+  const parts: string[] = [];
+
+  if (writtenAt) {
+    const ts = Date.parse(writtenAt);
+    if (!Number.isNaN(ts)) {
+      const ageDays = Math.floor((Date.now() - ts) / 86_400_000);
+      if (ageDays >= 7) parts.push(`written ${ageDays}d ago`);
+    }
+  }
+
+  if (snapshot.length > 0 && currentSpine.length > 0) {
+    const snap = new Set(snapshot);
+    const cur = new Set(currentSpine);
+    let added = 0;
+    let dropped = 0;
+    for (const p of cur) if (!snap.has(p)) added++;
+    for (const p of snap) if (!cur.has(p)) dropped++;
+    const drift = added + dropped;
+    if (drift > 0) {
+      parts.push(`spine has shifted (${dropped} dropped, ${added} added since)`);
+    }
+  }
+
+  if (parts.length === 0) return null;
+  return parts.join("; ") + " — verify before relying";
 }
 
 /**
