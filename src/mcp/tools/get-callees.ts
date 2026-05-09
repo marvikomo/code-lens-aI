@@ -57,7 +57,7 @@ export function registerGetCallees(
          WHERE src:Function OR src:Method ${fileFilter}
          WITH src LIMIT 5
          MATCH (src)-[r:CALLS*1..${d}]->(target)
-         WITH DISTINCT target, length(r) AS distance
+         WITH DISTINCT target, size(r) AS distance
          RETURN target, distance
          ORDER BY distance, target.name
          LIMIT $lim`,
