@@ -2,6 +2,45 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolContext } from "../server";
 import { readQuery, asNumber, textResult } from "../util";
 
+/**
+ * Build a freshness annotation for an agent-written community description.
+ * Combines wall-clock age (from `descriptionWrittenAt`) with spine-file
+ * drift (snapshot taken at write-time vs. current spine). Returns null when
+ * there's nothing to flag — keeps the overview output uncluttered for fresh,
+ * stable summaries.
+ */
+function describeDescriptionFreshness(
+  writtenAt: string | null,
+  snapshot: string[],
+  currentSpine: string[],
+): string | null {
+  const parts: string[] = [];
+
+  if (writtenAt) {
+    const ts = Date.parse(writtenAt);
+    if (!Number.isNaN(ts)) {
+      const ageDays = Math.floor((Date.now() - ts) / 86_400_000);
+      if (ageDays >= 7) parts.push(`written ${ageDays}d ago`);
+    }
+  }
+
+  if (snapshot.length > 0 && currentSpine.length > 0) {
+    const snap = new Set(snapshot);
+    const cur = new Set(currentSpine);
+    let added = 0;
+    let dropped = 0;
+    for (const p of cur) if (!snap.has(p)) added++;
+    for (const p of snap) if (!cur.has(p)) dropped++;
+    const drift = added + dropped;
+    if (drift > 0) {
+      parts.push(`spine has shifted (${dropped} dropped, ${added} added since)`);
+    }
+  }
+
+  if (parts.length === 0) return null;
+  return parts.join("; ") + " — verify before relying";
+}
+
 export function registerGetOverview(
   server: McpServer,
   ctx: ToolContext,
@@ -21,7 +60,7 @@ export function registerGetOverview(
       inputSchema: {},
     },
     async () => {
-      const [counts, languages, communities] = await Promise.all([
+      const [counts, languages, communities, repoRows] = await Promise.all([
         readQuery(
           ctx,
           `MATCH (n:CodeNode)
@@ -37,18 +76,36 @@ export function registerGetOverview(
         ),
         readQuery(
           ctx,
+          // Fetch heuristicLabel for fallback chain, plus full paths so we
+          // can render relative-to-repo (basenames alone collide across
+          // communities — e.g. langchainjs has many `base.ts` and `index.ts`).
+          // Also fetch description timestamp + spine snapshot so we can flag
+          // stale summaries to the agent.
           `MATCH (c:Community)<-[:IN_COMMUNITY]-(f:File)
            OPTIONAL MATCH (c)<-[:IN_COMMUNITY]-(spine:File {is_core: true})
            WITH c, count(DISTINCT f) AS size,
-                collect(DISTINCT spine.name)[..6] AS spine,
-                collect(DISTINCT f.name)[..3] AS sample
+                collect(DISTINCT spine.path)[..6] AS spinePaths,
+                collect(DISTINCT f.path)[..3] AS samplePaths
            RETURN c.communityId AS id,
                   c.label AS label,
+                  c.heuristicLabel AS heuristicLabel,
                   c.description AS description,
-                  size, spine, sample
+                  c.descriptionWrittenAt AS descriptionWrittenAt,
+                  c.descriptionSpineSnapshot AS descriptionSpineSnapshot,
+                  size, spinePaths, samplePaths
            ORDER BY size DESC LIMIT 12`,
         ),
+        readQuery(ctx, `MATCH (r:Repository) RETURN r.path AS path LIMIT 1`),
       ]);
+
+      // Repo prefix used to render relative paths. Falls back to "" so
+      // absolute paths render as-is on cold/missing Repository nodes.
+      const repoPath: string =
+        (repoRows[0]?.path as string | undefined) ?? "";
+      const rel = (p: string): string =>
+        repoPath && p.startsWith(repoPath)
+          ? p.slice(repoPath.length).replace(/^\/+/, "")
+          : p;
 
       const out: string[] = [];
       out.push("# Codebase overview");
@@ -69,8 +126,26 @@ export function registerGetOverview(
         );
       } else {
         out.push("## Top architectural communities (Leiden + spine)");
-        const unlabeled: Array<{
+        out.push("");
+        out.push(
+          "> Subsystem `summary:` lines were written by an agent in a prior session " +
+            "via `label_community`. They may have drifted from current code. For " +
+            "claims you'll act on, verify by `read_code` on a spine file before relying.",
+        );
+        out.push("");
+        // Track each community's labeling state separately:
+        //   trulyUnlabeled = no agent label AND no heuristic could be derived
+        //   heuristicOnly  = heuristic available, but no semantic label set yet
+        // The ACTION REQUIRED block surfaces both cases distinctly so the
+        // agent knows which need labeling vs. which could be upgraded.
+        const trulyUnlabeled: Array<{
           id: number;
+          spine: string[];
+          sample: string[];
+        }> = [];
+        const heuristicOnly: Array<{
+          id: number;
+          heuristicLabel: string;
           spine: string[];
           sample: string[];
         }> = [];
@@ -78,47 +153,109 @@ export function registerGetOverview(
           const id = asNumber(r.id) ?? 0;
           const size = asNumber(r.size);
           const label = (r.label as string | null) ?? null;
+          const heuristicLabel =
+            (r.heuristicLabel as string | null) ?? null;
           const description = (r.description as string | null) ?? null;
-          const spine = (r.spine as string[]) ?? [];
-          const sample = (r.sample as string[]) ?? [];
+          const descriptionWrittenAt =
+            (r.descriptionWrittenAt as string | null) ?? null;
+          const snapshotRaw = r.descriptionSpineSnapshot as
+            | unknown[]
+            | null
+            | undefined;
+          const descriptionSpineSnapshot: string[] = Array.isArray(snapshotRaw)
+            ? (snapshotRaw as unknown[]).map(String)
+            : [];
+          const spinePaths = ((r.spinePaths as string[]) ?? []).map(rel);
+          const samplePaths = ((r.samplePaths as string[]) ?? []).map(rel);
 
-          const heading = label
-            ? `- **${label}** (community ${id}, ${size} files)`
-            : `- **community-${id}** (UNLABELED, ${size} files)`;
+          let heading: string;
+          if (label) {
+            heading = `- **\`${label}\`** (community ${id}, ${size} files)`;
+          } else if (heuristicLabel) {
+            heading = `- **\`${heuristicLabel}\`** (community ${id}, ${size} files, heuristic)`;
+          } else {
+            heading = `- **community-${id}** (UNLABELED, ${size} files)`;
+          }
+
+          let summaryLine = "";
+          if (description) {
+            summaryLine = `\n    summary: ${description}`;
+            const freshness = describeDescriptionFreshness(
+              descriptionWrittenAt,
+              descriptionSpineSnapshot,
+              (r.spinePaths as string[]) ?? [],
+            );
+            if (freshness) summaryLine += `\n    ↳ ${freshness}`;
+          }
+
           out.push(
             heading +
-              (spine.length ? `\n    spine: ${spine.join(", ")}` : "") +
-              (sample.length && !label
-                ? `\n    sample: ${sample.join(", ")}`
+              (spinePaths.length
+                ? `\n    spine: ${spinePaths.join(", ")}`
                 : "") +
-              (description ? `\n    summary: ${description}` : ""),
+              (samplePaths.length && !label
+                ? `\n    sample: ${samplePaths.join(", ")}`
+                : "") +
+              summaryLine,
           );
 
           if (!label) {
-            unlabeled.push({ id, spine, sample });
+            if (heuristicLabel) {
+              heuristicOnly.push({
+                id,
+                heuristicLabel,
+                spine: spinePaths,
+                sample: samplePaths,
+              });
+            } else {
+              trulyUnlabeled.push({ id, spine: spinePaths, sample: samplePaths });
+            }
           }
         }
 
-        if (unlabeled.length > 0) {
+        if (trulyUnlabeled.length > 0 || heuristicOnly.length > 0) {
           out.push("");
+          const total = trulyUnlabeled.length + heuristicOnly.length;
           out.push(
-            `## ⚠️ ACTION REQUIRED — ${unlabeled.length} ${
-              unlabeled.length === 1 ? "community is" : "communities are"
-            } unlabeled`,
+            `## ⚠️ ACTION RECOMMENDED — ${total} ${
+              total === 1 ? "community lacks" : "communities lack"
+            } a semantic label`,
           );
           out.push("");
           out.push(
             "Call `label_community` for each. Suggested format: 2-4 word " +
-              "kebab-case name based on what the spine files do " +
-              "(e.g. \"auth-pipeline\", \"user-flow-handlers\"). " +
-              "Optionally pass a one-sentence `description` too.",
+              'kebab-case name based on what the spine files do ' +
+              '(e.g. "auth-pipeline", "user-flow-handlers"). ' +
+              "Optionally pass a one-sentence `description` too. " +
+              "Heuristic labels are derived from folder names — semantic labels " +
+              "from you will be much sharper.",
           );
           out.push("");
-          for (const u of unlabeled) {
-            out.push(`- communityId: ${u.id}`);
-            out.push(`    spine: [${u.spine.join(", ")}]`);
-            if (u.sample.length) {
-              out.push(`    sample: [${u.sample.join(", ")}]`);
+          if (heuristicOnly.length > 0) {
+            out.push(
+              `### Heuristic-labeled (${heuristicOnly.length}) — could be upgraded`,
+            );
+            for (const u of heuristicOnly) {
+              out.push(
+                `- communityId: ${u.id} (current heuristic: \`${u.heuristicLabel}\`)`,
+              );
+              out.push(`    spine: [${u.spine.join(", ")}]`);
+              if (u.sample.length) {
+                out.push(`    sample: [${u.sample.join(", ")}]`);
+              }
+            }
+            out.push("");
+          }
+          if (trulyUnlabeled.length > 0) {
+            out.push(
+              `### Fully unlabeled (${trulyUnlabeled.length}) — no heuristic available`,
+            );
+            for (const u of trulyUnlabeled) {
+              out.push(`- communityId: ${u.id}`);
+              out.push(`    spine: [${u.spine.join(", ")}]`);
+              if (u.sample.length) {
+                out.push(`    sample: [${u.sample.join(", ")}]`);
+              }
             }
           }
         }

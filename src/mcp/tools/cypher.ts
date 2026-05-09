@@ -28,13 +28,21 @@ export function registerCypher(server: McpServer, ctx: ToolContext): void {
       description:
         "Run an arbitrary read-only Cypher query against the Neo4j knowledge graph. " +
         "Use this only when the higher-level tools (search_code, get_definition, get_callers, " +
-        "get_callees, impact_analysis, get_overview) cannot answer the question. " +
-        "Schema reference: nodes carry the base label `:CodeNode` plus a kind label " +
-        "(`:File`, `:Function`, `:Method`, `:Class`, `:Interface`, `:TypeAlias`, `:Enum`, " +
-        "`:Property`, `:Repository`, `:Folder`, `:Community`, `:Unresolved`). " +
+        "get_callees, impact_analysis, get_overview) cannot answer the question.\n\n" +
+        "Schema reference — every node has the base label `:CodeNode` plus ONE kind label. " +
+        "Properties live on specific kinds; querying e.g. `f.startRow` on a :File returns null.\n" +
+        "  :File           → name, path, language, isTest, testFramework, contentHash, lastIndexed, community, pagerank, boundary, is_core\n" +
+        "  :Function       → name, path, signature, body, startRow, endRow, httpMethod, route, embedding\n" +
+        "  :Method         → name, path, signature, body, startRow, endRow, embedding\n" +
+        "  :Class          → name, path, signature, body, startRow, endRow, embedding\n" +
+        "  :Interface, :TypeAlias, :Enum → name, path, signature, body, startRow, endRow\n" +
+        "  :Property, :Variable → name, path, signature, body, startRow, endRow, builder\n" +
+        "  :Repository     → name, path, lastCommit, lastIndexed, sourceUrl\n" +
+        "  :Folder         → name, path\n" +
+        "  :Community      → communityId, name, label, heuristicLabel, description, size\n" +
+        "  :Unresolved     → id, symbol\n\n" +
         "Edge types: CALLS, IMPORTS, DEFINES, CONTAINS, EXTENDS, IMPLEMENTS, HAS_METHOD, " +
-        "HAS_PROPERTY, IN_COMMUNITY. Common props: name, path, language, signature, body, " +
-        "startRow, endRow, embedding, community, pagerank, boundary, is_core. " +
+        "HAS_PROPERTY, IN_COMMUNITY.\n\n" +
         "Mutations (CREATE/MERGE/DELETE/SET/REMOVE/DROP/etc.) are rejected.",
       inputSchema: cypherSchema,
     },

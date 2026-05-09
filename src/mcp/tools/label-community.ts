@@ -51,15 +51,27 @@ export function registerLabelCommunity(
       inputSchema: labelCommunitySchema,
     },
     async ({ communityId, label, description }) => {
+      // Stamp ISO timestamp + spine snapshot when description is set.
+      // Lets future sessions surface "summary written N days ago, spine has
+      // shifted M files since" so agents can decide whether to verify.
+      const now = new Date().toISOString();
       const params: Record<string, unknown> = {
         cid: int(communityId),
         label,
+        now,
       };
       let cypher = `MATCH (c:Community { communityId: $cid })
-        SET c.label = $label`;
+        SET c.label = $label, c.labelWrittenAt = $now`;
       if (description) {
-        cypher += `, c.description = $description`;
+        cypher += `, c.description = $description, c.descriptionWrittenAt = $now`;
         params.description = description;
+        // Snapshot the current spine (top-by-pagerank, is_core) so we can
+        // detect drift later — checked against current spine on read.
+        cypher += `
+          WITH c
+          OPTIONAL MATCH (c)<-[:IN_COMMUNITY]-(spine:File {is_core: true})
+          WITH c, collect(DISTINCT spine.path) AS spinePaths
+          SET c.descriptionSpineSnapshot = spinePaths`;
       }
       cypher += ` RETURN c.communityId AS id, c.label AS label`;
 
