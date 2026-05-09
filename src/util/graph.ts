@@ -72,6 +72,14 @@ export interface GraphNode {
   isTest?: boolean;
   /** Test framework detected (jest / vitest / bun / junit / pytest / etc). */
   testFramework?: string;
+  /** sha256 hex of the File's source content. Used by hash-mode incremental indexing. */
+  contentHash?: string;
+  /** ISO timestamp of when this node was last written to Neo4j. */
+  lastIndexed?: string;
+  /** Repository-only: git HEAD commit hash at last indexing (when target is a git repo). */
+  lastCommit?: string;
+  /** Repository-only: original git URL when the repo was indexed via URL ingestion. */
+  sourceUrl?: string;
   /** Free-form metadata (modifiers, parameters, etc.) */
   meta?: Record<string, unknown>;
 }

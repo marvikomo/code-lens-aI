@@ -175,6 +175,10 @@ function nodeToRow(n: GraphNode): Record<string, unknown> {
   if (n.builder) props.builder = n.builder;
   if (n.isTest) props.isTest = n.isTest;
   if (n.testFramework) props.testFramework = n.testFramework;
+  if (n.contentHash) props.contentHash = n.contentHash;
+  if (n.lastIndexed) props.lastIndexed = n.lastIndexed;
+  if (n.lastCommit) props.lastCommit = n.lastCommit;
+  if (n.sourceUrl) props.sourceUrl = n.sourceUrl;
   if (n.range) {
     props.startRow = n.range.start.row;
     props.startColumn = n.range.start.column;
