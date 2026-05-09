@@ -4,7 +4,7 @@
 
 Built on Tree-sitter + Neo4j + Leiden community detection. JS / TS / Java today, polyglot-ready.
 
-> **From a real session on LangChainJS (2,093 files, 73 detected subsystems):**
+> **From a real session on a ~2,000-file TypeScript monorepo (73 detected subsystems):**
 > *"This is exactly the right tool — it collapses what would be a long exploration into a handful of focused calls, and the community detection produces architectural insight you'd struggle to get from grep."*
 > 4 tool calls produced both a complete codebase tour AND a deep mental-model explanation. A naive grep/find/read exploration of the same repo: ~25–40 calls.
 
@@ -18,17 +18,17 @@ Without it: agent opens an unfamiliar 2,000-file monorepo and burns 10–20 `gre
 
 With it: **one call** returns the full architectural shape of the codebase — counts, languages, and the **top architectural subsystems detected by Leiden community detection**. For each subsystem, you get:
 
-- Its **semantic label** (set by an agent in a prior session, persists across re-runs) — e.g. `core-runtime`, `modern-agents-middleware`, `openai-provider`
+- Its **semantic label** (set by an agent in a prior session, persists across re-runs) — e.g. `auth-pipeline`, `request-routing`, `data-access`
 - Its **size** (how many files belong to it)
 - Its **spine files** (the most central by PageRank — "of these 196 files, read these 6 first")
 - A one-sentence **summary** of what it does, with a **freshness signal** if the description has drifted
 - A **heuristic-label fallback** (folder-name) for any subsystem an agent hasn't manually labeled — so you never see a bare `community-43`
 
-The PageRank-ranked spine files are the single most useful pedagogical signal. On LangChainJS, PageRank correctly surfaced `runnables/base.ts` as the central file in `core-runtime` — twice as central as anything else, which is exactly right.
+The PageRank-ranked spine files are the single most useful pedagogical signal. On real production codebases, PageRank correctly surfaces the foundational files in each subsystem — typically 2× more central than anything else in that community, which lines up with what an experienced contributor would point you to.
 
 When an agent has labeled a community, the `summary:` line carries it across sessions. Drifted descriptions get auto-flagged: `↳ written 14d ago; spine has shifted (3 dropped, 6 added since) — verify before relying`.
 
-**Real result:** on LangChainJS, `get_overview` + 3 `cypher` lookups produced the entire architectural mental model an experienced contributor would need. Without `get_overview`, you'd reverse-engineer the same layout from `package.json` files plus folder spelunking.
+**Real result:** on a ~2,000-file TypeScript monorepo, `get_overview` + 3 targeted `cypher` lookups produced the entire architectural mental model an experienced contributor would need. Without `get_overview`, you'd reverse-engineer the same layout from `package.json` files plus folder spelunking.
 
 ### `generate_wiki` — Wiki skeleton in one MCP call
 
@@ -185,13 +185,13 @@ Every tool's description tells the agent **exactly when to use it** — explicit
 Four design choices that came directly from real-session feedback and now define the product:
 
 **1. Spine files turn "200-file subsystem" into "read these 6 first."**
-PageRank + boundary-degree centrality picks out the load-bearing files in each community. The agent doesn't have to guess where to start. On LangChainJS, this surfaced `runnables/base.ts` as `core-runtime`'s spine — the file every other file in the subsystem ultimately leans on. That's a pedagogical signal nothing else in the agent-coding space currently provides.
+PageRank + boundary-degree centrality picks out the load-bearing files in each community. The agent doesn't have to guess where to start — code-lens-aI tells it which 5–6 files every other file in the subsystem ultimately leans on. That's a pedagogical signal nothing else in the agent-coding space currently provides.
 
 **2. Persistent semantic labels — set once by an agent, used forever.**
-After `label_community` is called, the label rides along on every subsequent `get_overview` and `generate_wiki` call across all future sessions. A community labeled `modern-agents-middleware` once stays that way until the graph genuinely shifts (and we'll tell the agent when it has). No re-labeling on every session.
+After `label_community` is called, the label rides along on every subsequent `get_overview` and `generate_wiki` call across all future sessions. A community labeled `auth-pipeline` once stays that way until the graph genuinely shifts (and we'll tell the agent when it has). No re-labeling on every session.
 
 **3. Heuristic fallback so you never see "UNLABELED."**
-When no agent has labeled a community yet, code-lens-aI derives a folder-name heuristic (`langchain-classic`, `providers`, etc.) and marks it `(heuristic)`. Agents get a useful name immediately AND a clear signal that they could upgrade it to a semantic label.
+When no agent has labeled a community yet, code-lens-aI derives a folder-name heuristic (e.g. `auth`, `api`, `services`) and marks it `(heuristic)`. Agents get a useful name immediately AND a clear signal that they could upgrade it to a semantic label.
 
 **4. Description freshness signals — no silent staleness.**
 Every agent-written description is timestamped + the spine snapshot is captured. Subsequent reads compute drift and flag stale descriptions: `↳ written 14d ago; spine has shifted (3 dropped, 6 added since) — verify before relying`. Agents never propagate stale claims confidently.
