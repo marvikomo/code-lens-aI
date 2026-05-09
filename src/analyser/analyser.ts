@@ -129,6 +129,11 @@ export function analyzeRepository(
   // Resolve imports → File nodes when possible.
   resolveImports(pendingImports, fileNodesByAbsPath, builder);
 
+  // Cross-file class/interface inheritance: bind unresolved EXTENDS/IMPLEMENTS
+  // edges to real Class/Interface nodes by name lookup, disambiguated via
+  // the IMPORTS edges we just resolved.
+  resolveTypeRefsByName(builder);
+
   // Optional: collapse unresolved CALLS that match a Function/Method name in the same file or repo.
   if (opts.resolveCallsByName !== false) {
     resolveCallsByName(builder);
@@ -278,6 +283,7 @@ export function analyzeIncremental(
   walk(absRepo, repoNode);
 
   resolveImports(pendingImports, fileNodesByAbsPath, builder);
+  resolveTypeRefsByName(builder);
   if (opts.resolveCallsByName !== false) resolveCallsByName(builder);
 
   return builder.build();
@@ -449,6 +455,114 @@ function resolveCallsByName(builder: GraphBuilder): void {
       const same = candidates.find((c) => c.path === fromNode.path);
       if (same) target = same;
     }
+
+    const oldTo = edge.to;
+    edge.to = target.id;
+    delete edge.unresolved;
+    edge.id = `${edge.kind}:${edge.from}->${edge.to}`;
+    builder.rekeyEdge(edge.from, oldTo, edge.kind, edge);
+  }
+}
+
+/**
+ * Strip generics + take last `.`-segment so the by-name lookup hits the
+ * indexed simple name. Handles both JS/TS forms (`Foo<Bar>`, `module.Foo`)
+ * and Java forms (`com.foo.Bar`, `Outer.Inner`, `Bar<T>`).
+ */
+function normalizeTypeRef(symbol: string): string | null {
+  const noGenerics = symbol.split("<")[0].trim();
+  if (!noGenerics) return null;
+  const parts = noGenerics.split(".");
+  return parts[parts.length - 1] || null;
+}
+
+/**
+ * Cross-file resolution for EXTENDS / IMPLEMENTS edges. The extractors emit
+ * `unresolved:class:<name>` placeholders when they can't tell at parse time
+ * whether the parent type is local or external — same trick we use for CALLS.
+ *
+ * Strategy:
+ *   1. Index all Class + Interface nodes by simple name.
+ *   2. Build a file→imported-files map from existing IMPORTS edges so we can
+ *      disambiguate when multiple candidates share a name.
+ *   3. For each unresolved EXTENDS/IMPLEMENTS edge:
+ *        - Normalize the symbol (strip generics, last `.`-segment).
+ *        - Look up candidates in the right pool (Interface for IMPLEMENTS,
+ *          Class for EXTENDS, with fallback to Interface for TS quirks).
+ *        - If multiple candidates and we have IMPORTS info, prefer the one
+ *          whose file the source actually imports.
+ *        - Bind unique matches; leave ambiguous ones unresolved (better
+ *          than silently picking wrong).
+ *
+ * No extractor changes needed — this just rebinds existing edges. Runs after
+ * resolveImports (we need IMPORTS edges) and before resolveCallsByName for
+ * deterministic ordering.
+ */
+function resolveTypeRefsByName(builder: GraphBuilder): void {
+  const graph = builder.build();
+
+  const classByName = new Map<string, GraphNode[]>();
+  const interfaceByName = new Map<string, GraphNode[]>();
+  for (const n of graph.nodes) {
+    if (n.kind === "Class") {
+      const arr = classByName.get(n.name) ?? [];
+      arr.push(n);
+      classByName.set(n.name, arr);
+    } else if (n.kind === "Interface") {
+      const arr = interfaceByName.get(n.name) ?? [];
+      arr.push(n);
+      interfaceByName.set(n.name, arr);
+    }
+  }
+
+  // file id → set of imported file ids (file→file IMPORTS edges only)
+  const fileImports = new Map<string, Set<string>>();
+  for (const e of graph.edges) {
+    if (e.kind !== "IMPORTS") continue;
+    const fromNode = builder.getNode(e.from);
+    const toNode = builder.getNode(e.to);
+    if (!fromNode || !toNode) continue;
+    if (fromNode.kind !== "File" || toNode.kind !== "File") continue;
+    const set = fileImports.get(e.from) ?? new Set<string>();
+    set.add(e.to);
+    fileImports.set(e.from, set);
+  }
+
+  for (const edge of graph.edges) {
+    if (edge.kind !== "EXTENDS" && edge.kind !== "IMPLEMENTS") continue;
+    if (!edge.unresolved) continue;
+
+    const simpleName = normalizeTypeRef(edge.unresolved);
+    if (!simpleName) continue;
+
+    let candidates =
+      edge.kind === "IMPLEMENTS"
+        ? interfaceByName.get(simpleName)
+        : classByName.get(simpleName);
+    // TS quirk: `class X extends I` where I is actually an Interface.
+    if (
+      edge.kind === "EXTENDS" &&
+      (!candidates || candidates.length === 0)
+    ) {
+      candidates = interfaceByName.get(simpleName);
+    }
+    if (!candidates || candidates.length === 0) continue;
+
+    // Find the source file of this edge for disambiguation.
+    const fromNode = builder.getNode(edge.from);
+    const sourceFileId = fromNode?.path ? `file:${fromNode.path}` : null;
+
+    let target: GraphNode | undefined;
+    if (sourceFileId && candidates.length > 1) {
+      const imports = fileImports.get(sourceFileId);
+      if (imports) {
+        target = candidates.find(
+          (c) => c.path && imports.has(`file:${c.path}`),
+        );
+      }
+    }
+    if (!target && candidates.length === 1) target = candidates[0];
+    if (!target) continue; // ambiguous AND no IMPORTS hint → safer to leave
 
     const oldTo = edge.to;
     edge.to = target.id;

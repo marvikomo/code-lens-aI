@@ -43,11 +43,14 @@ export function registerGetCallers(
       const lim = limit ?? 20;
 
       // Resolve the symbol to actual node ids first (handles unresolved targets too).
+      // `r` from `[r:CALLS*1..N]` is a List<Relationship>; use `size(r)` not
+      // `length(r)` (length() is for Path values, hence the Neo4j type-mismatch
+      // error this tool used to throw on depth=1).
       const records = await readQuery(
         ctx,
         `MATCH (caller:CodeNode)-[r:CALLS*1..${d}]->(target)
          WHERE target.name = $symbol OR target.symbol = $symbol
-         WITH caller, length(r) AS distance, target
+         WITH caller, size(r) AS distance, target
          RETURN DISTINCT caller, distance, target.name AS targetName, target.path AS targetPath
          ORDER BY distance, caller.path
          LIMIT $lim`,

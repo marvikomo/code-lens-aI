@@ -302,13 +302,25 @@ export class JsTsExtractor implements LanguageExtractor {
   ): void {
     // tree-sitter-javascript: `class_heritage` node containing an `extends` clause.
     // tree-sitter-typescript: `class_heritage` may include `extends_clause` and `implements_clause`.
+    //
+    // tree-sitter-typescript exposes `type_arguments` (the `<string, string>`
+    // part) as a SEPARATE named child of extends_clause/implements_clause,
+    // not nested inside the type. Filter to type-name kinds only so we
+    // don't emit a spurious EXTENDS edge for the bare generic args.
+    const TYPE_NAME_KINDS = new Set([
+      "type_identifier",
+      "identifier",
+      "nested_type_identifier",
+      "generic_type",
+      "member_expression",
+    ]);
     for (const child of node.namedChildren) {
       if (child.type !== "class_heritage") continue;
       for (const part of child.namedChildren) {
         if (part.type === "extends_clause") {
           // TS form
           for (const value of part.namedChildren) {
-            if (value.type === "implements_clause") continue;
+            if (!TYPE_NAME_KINDS.has(value.type)) continue;
             const symbol = value.text;
             ctx.builder.addEdge({
               kind: "EXTENDS",
@@ -319,6 +331,7 @@ export class JsTsExtractor implements LanguageExtractor {
           }
         } else if (part.type === "implements_clause") {
           for (const value of part.namedChildren) {
+            if (!TYPE_NAME_KINDS.has(value.type)) continue;
             const symbol = value.text;
             ctx.builder.addEdge({
               kind: "IMPLEMENTS",
@@ -327,7 +340,7 @@ export class JsTsExtractor implements LanguageExtractor {
               unresolved: symbol,
             });
           }
-        } else {
+        } else if (TYPE_NAME_KINDS.has(part.type)) {
           // JS form: identifier directly under class_heritage
           const symbol = part.text;
           ctx.builder.addEdge({
