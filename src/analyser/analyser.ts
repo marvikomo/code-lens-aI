@@ -4,6 +4,7 @@ import {
   GraphBuilder,
   GraphNode,
   CodeGraph,
+  NodeKind,
 } from "../util/graph";
 import { detectLanguage, SupportedLanguage } from "../util/language";
 import { getParser } from "./../util/parserFactory";
@@ -430,6 +431,81 @@ function resolveSpec(
   return null;
 }
 
+/**
+ * Pre-built lookup index for the IMPORTS→EXPORTS resolution algorithm
+ * described in the symbol-aliasing problem brief (Phase 1).
+ *
+ * - `fileImports`: callerFileId → set of imported fileIds (file-level deps)
+ * - `exportsByFileAndName`: "fileId|exportedName" → exported declaration node
+ *
+ * Built once per analyser pass and reused across resolveCallsByName +
+ * resolveTypeRefsByName.
+ */
+interface ImportExportIndex {
+  fileImports: Map<string, Set<string>>;
+  exportsByFileAndName: Map<string, GraphNode>;
+}
+
+function buildImportExportIndex(builder: GraphBuilder): ImportExportIndex {
+  const graph = builder.build();
+  const fileImports = new Map<string, Set<string>>();
+  const exportsByFileAndName = new Map<string, GraphNode>();
+
+  for (const e of graph.edges) {
+    if (e.kind === "IMPORTS") {
+      const fromNode = builder.getNode(e.from);
+      const toNode = builder.getNode(e.to);
+      if (
+        fromNode?.kind === "File" &&
+        toNode?.kind === "File"
+      ) {
+        const set = fileImports.get(e.from) ?? new Set<string>();
+        set.add(e.to);
+        fileImports.set(e.from, set);
+      }
+    } else if (e.kind === "EXPORTS") {
+      const exportedName = e.meta?.exportedName as string | undefined;
+      if (!exportedName) continue;
+      const target = builder.getNode(e.to);
+      if (!target) continue;
+      exportsByFileAndName.set(`${e.from}|${exportedName}`, target);
+    }
+  }
+
+  return { fileImports, exportsByFileAndName };
+}
+
+/**
+ * The Phase-1 `follow()` core: given a caller's file and a name, walk the
+ * caller's IMPORTS edges and check each imported file's EXPORTS for a
+ * matching name. Returns the unique matching declaration if found,
+ * otherwise null. Phase 2/3 will extend this to follow REEXPORTS and
+ * REEXPORTS_ALL chains transitively; for now it's a single-hop lookup.
+ *
+ * `kindFilter` restricts results to specific node kinds (e.g. Function/Method
+ * for CALLS resolution, Class/Interface for inheritance). Caller passes the
+ * set of acceptable kinds; the lookup ignores exports of other kinds.
+ */
+function followViaImports(
+  index: ImportExportIndex,
+  callerFileId: string,
+  name: string,
+  kindFilter: ReadonlySet<NodeKind>,
+): GraphNode | null {
+  const importedFiles = index.fileImports.get(callerFileId);
+  if (!importedFiles) return null;
+  const matches: GraphNode[] = [];
+  for (const importedFileId of importedFiles) {
+    const target = index.exportsByFileAndName.get(`${importedFileId}|${name}`);
+    if (target && kindFilter.has(target.kind)) matches.push(target);
+  }
+  // Single unique match wins. Multiple matches → ambiguous, fall back to
+  // caller's other heuristics rather than guessing here.
+  return matches.length === 1 ? matches[0] : null;
+}
+
+const CALLABLE_KINDS: ReadonlySet<NodeKind> = new Set(["Function", "Method"]);
+
 function resolveCallsByName(builder: GraphBuilder): void {
   const graph = builder.build();
   // index callable nodes by name
@@ -442,19 +518,36 @@ function resolveCallsByName(builder: GraphBuilder): void {
     }
   }
 
+  // Phase 1: import-aware disambiguation. Built once for this pass.
+  const ieIndex = buildImportExportIndex(builder);
+
   for (const edge of graph.edges) {
     if (edge.kind !== "CALLS") continue;
     if (!edge.unresolved) continue;
     const candidates = byName.get(edge.unresolved);
     if (!candidates || candidates.length === 0) continue;
 
-    // Prefer a callable defined in the same file as the caller.
     const fromNode = builder.getNode(edge.from);
-    let target = candidates[0];
-    if (fromNode?.path) {
-      const same = candidates.find((c) => c.path === fromNode.path);
-      if (same) target = same;
+    const callerFileId = fromNode?.path ? `file:${fromNode.path}` : null;
+
+    // Preference order: (1) IMPORTS→EXPORTS unique match (the new path),
+    // (2) candidate defined in the same file as the caller, (3) first
+    // candidate. (1) wins because the caller's import statement is the
+    // strongest signal of which same-named function it actually meant.
+    let target: GraphNode | undefined;
+    if (callerFileId) {
+      const viaImports = followViaImports(
+        ieIndex,
+        callerFileId,
+        edge.unresolved,
+        CALLABLE_KINDS,
+      );
+      if (viaImports) target = viaImports;
     }
+    if (!target && fromNode?.path) {
+      target = candidates.find((c) => c.path === fromNode.path);
+    }
+    if (!target) target = candidates[0];
 
     const oldTo = edge.to;
     edge.to = target.id;
@@ -498,6 +591,12 @@ function normalizeTypeRef(symbol: string): string | null {
  * resolveImports (we need IMPORTS edges) and before resolveCallsByName for
  * deterministic ordering.
  */
+const CLASS_OR_INTERFACE: ReadonlySet<NodeKind> = new Set([
+  "Class",
+  "Interface",
+]);
+const INTERFACE_ONLY: ReadonlySet<NodeKind> = new Set(["Interface"]);
+
 function resolveTypeRefsByName(builder: GraphBuilder): void {
   const graph = builder.build();
 
@@ -515,18 +614,8 @@ function resolveTypeRefsByName(builder: GraphBuilder): void {
     }
   }
 
-  // file id → set of imported file ids (file→file IMPORTS edges only)
-  const fileImports = new Map<string, Set<string>>();
-  for (const e of graph.edges) {
-    if (e.kind !== "IMPORTS") continue;
-    const fromNode = builder.getNode(e.from);
-    const toNode = builder.getNode(e.to);
-    if (!fromNode || !toNode) continue;
-    if (fromNode.kind !== "File" || toNode.kind !== "File") continue;
-    const set = fileImports.get(e.from) ?? new Set<string>();
-    set.add(e.to);
-    fileImports.set(e.from, set);
-  }
+  // Phase 1: same import-aware index used by resolveCallsByName.
+  const ieIndex = buildImportExportIndex(builder);
 
   for (const edge of graph.edges) {
     if (edge.kind !== "EXTENDS" && edge.kind !== "IMPLEMENTS") continue;
@@ -548,13 +637,27 @@ function resolveTypeRefsByName(builder: GraphBuilder): void {
     }
     if (!candidates || candidates.length === 0) continue;
 
-    // Find the source file of this edge for disambiguation.
     const fromNode = builder.getNode(edge.from);
     const sourceFileId = fromNode?.path ? `file:${fromNode.path}` : null;
 
+    // Phase 1 preference: (1) IMPORTS→EXPORTS match wins; (2) any-IMPORTS
+    // disambiguation (older heuristic — caller imports from the candidate's
+    // file, regardless of whether that file actually exports this name);
+    // (3) unique candidate; (4) leave unresolved on ambiguity.
     let target: GraphNode | undefined;
-    if (sourceFileId && candidates.length > 1) {
-      const imports = fileImports.get(sourceFileId);
+    const filterKinds =
+      edge.kind === "IMPLEMENTS" ? INTERFACE_ONLY : CLASS_OR_INTERFACE;
+    if (sourceFileId) {
+      const viaImports = followViaImports(
+        ieIndex,
+        sourceFileId,
+        simpleName,
+        filterKinds,
+      );
+      if (viaImports) target = viaImports;
+    }
+    if (!target && sourceFileId && candidates.length > 1) {
+      const imports = ieIndex.fileImports.get(sourceFileId);
       if (imports) {
         target = candidates.find(
           (c) => c.path && imports.has(`file:${c.path}`),
@@ -562,7 +665,7 @@ function resolveTypeRefsByName(builder: GraphBuilder): void {
       }
     }
     if (!target && candidates.length === 1) target = candidates[0];
-    if (!target) continue; // ambiguous AND no IMPORTS hint → safer to leave
+    if (!target) continue; // still ambiguous → safer to leave unresolved
 
     const oldTo = edge.to;
     edge.to = target.id;
