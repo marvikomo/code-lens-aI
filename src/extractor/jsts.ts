@@ -48,7 +48,10 @@ export class JsTsExtractor implements LanguageExtractor {
 
       case "export_statement": {
         // Re-export with source: `export { foo } from './bar'` or `export * from './bar'`.
-        // Otherwise it wraps a declaration (function/class/interface/type/enum) — fall through to recurse.
+        // We emit an IMPORTS edge so file→file dependency is captured. Phase 2
+        // of the alias-resolution work will additionally emit REEXPORTS here
+        // so the resolver can follow the chain. For now, the re-export's source
+        // file becomes a normal IMPORTS dependency.
         for (const child of node.namedChildren) {
           if (child.type === "string") {
             const spec = stripQuotes(child.text);
@@ -56,7 +59,62 @@ export class JsTsExtractor implements LanguageExtractor {
             return;
           }
         }
-        break;
+
+        // Direct exports: `export function foo()`, `export class Foo`,
+        // `export const foo = ...`, etc. — collect the exported names BEFORE
+        // recursing (declarations get created during recursion), then look up
+        // the just-created nodes and emit EXPORTS edges.
+        //
+        // Also handles `export { foo, bar as baz }` (no source) where the
+        // declarations were already extracted earlier in the file walk.
+        const exportSpecs: { localName: string; exportedName: string }[] = [];
+        for (const child of node.namedChildren) {
+          if (child.type === "export_clause") {
+            // `export { foo, bar as baz }` — iterate specifiers
+            for (const spec of child.namedChildren) {
+              if (spec.type === "export_specifier") {
+                const localName =
+                  fieldText(spec, "name") ?? spec.text;
+                const exportedName =
+                  fieldText(spec, "alias") ?? localName;
+                if (localName) {
+                  exportSpecs.push({ localName, exportedName });
+                }
+              }
+            }
+          } else {
+            // Wrapped declaration: pull the name from the appropriate field
+            const declName = declarationName(child);
+            if (declName) {
+              exportSpecs.push({ localName: declName, exportedName: declName });
+            }
+          }
+        }
+
+        // Recurse to create the declared nodes
+        for (const child of node.namedChildren) {
+          this.visit(child, ctx, enclosing);
+        }
+
+        // Resolve exports against the builder: find local declarations by
+        // (file, name) and emit EXPORTS edges. Misses (couldn't find a local
+        // node) silently drop — typically harmless edge cases like
+        // `export default <expression>` or default-anonymous exports.
+        for (const spec of exportSpecs) {
+          const localNode = findLocalDeclaration(
+            ctx,
+            spec.localName,
+          );
+          if (localNode) {
+            ctx.builder.addEdge({
+              kind: "EXPORTS",
+              from: ctx.fileNode.id,
+              to: localNode.id,
+              meta: { exportedName: spec.exportedName },
+            });
+          }
+        }
+        return;
       }
 
       case "call_expression": {
@@ -608,4 +666,67 @@ function stripQuotes(s: string): string {
     }
   }
   return s;
+}
+
+/**
+ * Pull the declared name out of a node that's directly wrapped by an
+ * `export` statement (function/class/interface/type-alias/enum) or a
+ * `lexical_declaration` (`export const foo = ...`). Returns null for
+ * shapes we don't currently track (default-anonymous exports, exported
+ * expressions, etc.) — those silently drop in the EXPORTS pass.
+ */
+function declarationName(node: SyntaxNode): string | null {
+  switch (node.type) {
+    case "function_declaration":
+    case "generator_function_declaration":
+    case "class_declaration":
+    case "abstract_class_declaration":
+    case "interface_declaration":
+    case "type_alias_declaration":
+    case "enum_declaration": {
+      return fieldText(node, "name") ?? null;
+    }
+    case "lexical_declaration":
+    case "variable_declaration": {
+      // `export const foo = ...` — pull the first declarator's name.
+      // Multi-declarator exports (`const a = 1, b = 2`) only get the first
+      // for now; rare in practice.
+      const decl = node.namedChildren.find(
+        (c) => c.type === "variable_declarator",
+      );
+      return decl ? (fieldText(decl, "name") ?? null) : null;
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * Find a top-level declaration in the current file by name. Used by the
+ * EXPORTS pass to bind `export { foo }` clauses (where `foo` was declared
+ * earlier in the same file) to the existing node. Linear scan over the
+ * builder's nodes — fine for typical per-file extraction sizes.
+ */
+function findLocalDeclaration(
+  ctx: ExtractContext,
+  name: string,
+): GraphNode | null {
+  const filePath = ctx.fileNode.path;
+  if (!filePath) return null;
+  const declKinds = new Set([
+    "Function",
+    "Method",
+    "Class",
+    "Interface",
+    "TypeAlias",
+    "Enum",
+    "Variable",
+  ]);
+  const graph = ctx.builder.build();
+  for (const n of graph.nodes) {
+    if (n.path !== filePath) continue;
+    if (!declKinds.has(n.kind)) continue;
+    if (n.name === name) return n;
+  }
+  return null;
 }

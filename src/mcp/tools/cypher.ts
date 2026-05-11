@@ -41,8 +41,10 @@ export function registerCypher(server: McpServer, ctx: ToolContext): void {
         "  :Folder         → name, path\n" +
         "  :Community      → communityId, name, label, heuristicLabel, description, size\n" +
         "  :Unresolved     → id, symbol\n\n" +
-        "Edge types: CALLS, IMPORTS, DEFINES, CONTAINS, EXTENDS, IMPLEMENTS, HAS_METHOD, " +
-        "HAS_PROPERTY, IN_COMMUNITY.\n\n" +
+        "Edge types: CALLS, IMPORTS, EXPORTS, DEFINES, CONTAINS, EXTENDS, IMPLEMENTS, HAS_METHOD, " +
+        "HAS_PROPERTY, IN_COMMUNITY.\n" +
+        "  EXPORTS(File → declaration) carries `meta_exportedName` — the externally-visible " +
+        "name (may differ from the declaration's own name due to `export { x as y }`).\n\n" +
         "Mutations (CREATE/MERGE/DELETE/SET/REMOVE/DROP/etc.) are rejected.",
       inputSchema: cypherSchema,
     },

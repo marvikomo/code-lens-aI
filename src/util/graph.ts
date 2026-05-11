@@ -34,7 +34,14 @@ export type EdgeKind =
   | "CALLS"
   | "IMPORTS"
   | "EXTENDS"
-  | "IMPLEMENTS";
+  | "IMPLEMENTS"
+  // EXPORTS(File → Function/Method/Class/Interface/TypeAlias/Enum/Variable)
+  // with `meta.exportedName` carrying the externally-visible name (which may
+  // differ from the declaration's own name due to `export { x as y }` renames).
+  // Used by the resolver to bind cross-file calls/inheritance via IMPORTS→EXPORTS
+  // lookup instead of name-only heuristics. Phase 1 of the alias-resolution
+  // upgrade described in the symbol-aliasing problem brief.
+  | "EXPORTS";
 
 export interface Position {
   row: number;
